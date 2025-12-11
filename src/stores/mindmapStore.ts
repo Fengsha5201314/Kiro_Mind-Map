@@ -105,6 +105,8 @@ interface MindMapStore {
   deleteNode: (nodeId: string) => void;
   moveNode: (nodeId: string, newParentId: string) => void;
   toggleNodeCollapse: (nodeId: string) => void;
+  expandAll: () => void;
+  collapseToLevel: (level: number) => void;
   
   // 视图状态操作
   setViewState: (viewState: Partial<ViewState>) => void;
@@ -318,6 +320,47 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
       }
       return node;
     });
+
+    set({
+      currentMindMap: {
+        ...currentMindMap,
+        nodes: updatedNodes,
+        updatedAt: Date.now()
+      }
+    });
+  },
+
+  // 展开所有节点
+  expandAll: () => {
+    const { currentMindMap } = get();
+    if (!currentMindMap) return;
+
+    const updatedNodes = currentMindMap.nodes.map(node => ({
+      ...node,
+      collapsed: false,
+      updatedAt: Date.now()
+    }));
+
+    set({
+      currentMindMap: {
+        ...currentMindMap,
+        nodes: updatedNodes,
+        updatedAt: Date.now()
+      }
+    });
+  },
+
+  // 折叠到指定层级（只显示该层级及以上的节点）
+  collapseToLevel: (level: number) => {
+    const { currentMindMap } = get();
+    if (!currentMindMap) return;
+
+    const updatedNodes = currentMindMap.nodes.map(node => ({
+      ...node,
+      // 如果节点层级 >= 指定层级，则折叠该节点（隐藏其子节点）
+      collapsed: node.level >= level,
+      updatedAt: Date.now()
+    }));
 
     set({
       currentMindMap: {

@@ -16,8 +16,7 @@ import ReactFlow, {
   NodeChange,
   EdgeChange,
   ReactFlowProvider,
-  useReactFlow,
-  useViewport
+  useReactFlow
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
@@ -26,9 +25,6 @@ import { MindMapNode } from '../../types/mindmap';
 import MindMapNodeComponent from './Node';
 import MindMapControls from './Controls';
 import ContextMenu from './ContextMenu';
-import { virtualizationService, VirtualizationResult } from '../../services/virtualizationService';
-import { useLazyLoading } from '../../hooks/useLazyLoading';
-
 import { rafThrottle } from '../../utils/performance';
 
 // 自定义节点类型映射
@@ -53,7 +49,7 @@ const convertToReactFlowNode = (mindMapNode: MindMapNode): Node => {
   };
 };
 
-// 生成边连接
+// 生成边连接 - 使用smoothstep实现类似豆包的直角折线效果
 const generateEdges = (nodes: MindMapNode[]): Edge[] => {
   const edges: Edge[] = [];
   
@@ -63,9 +59,9 @@ const generateEdges = (nodes: MindMapNode[]): Edge[] => {
         id: `${node.parentId}-${node.id}`,
         source: node.parentId,
         target: node.id,
-        type: 'smoothstep',
+        type: 'smoothstep', // 使用smoothstep实现直角折线
         style: {
-          stroke: '#666',
+          stroke: '#94a3b8', // 柔和的灰色
           strokeWidth: 2
         },
         animated: false
@@ -76,38 +72,108 @@ const generateEdges = (nodes: MindMapNode[]): Edge[] => {
   return edges;
 };
 
-// 自动布局算法 - 简单的层级布局
-const calculateNodePositions = (nodes: MindMapNode[]): MindMapNode[] => {
-  const positioned = [...nodes];
-  const levelGroups: { [level: number]: MindMapNode[] } = {};
+// 树形布局算法 - 基于父子关系的水平树形布局
+const calculateTreeLayout = (nodes: MindMapNode[]): MindMapNode[] => {
+  if (nodes.length === 0) return [];
   
-  // 按层级分组
-  positioned.forEach(node => {
-    if (!levelGroups[node.level]) {
-      levelGroups[node.level] = [];
-    }
-    levelGroups[node.level].push(node);
-  });
+  const positioned = nodes.map(n => ({ ...n }));
+  const nodeMap = new Map<string, MindMapNode>();
+  positioned.forEach(node => nodeMap.set(node.id, node));
   
-  // 为每个层级计算位置
-  Object.keys(levelGroups).forEach(levelStr => {
-    const level = parseInt(levelStr);
-    const nodesInLevel = levelGroups[level];
-    const levelWidth = nodesInLevel.length * 200; // 每个节点占用200px宽度
-    const startX = -levelWidth / 2;
+  // 找到根节点
+  const rootNode = positioned.find(n => n.level === 0);
+  if (!rootNode) return positioned;
+  
+  // 配置参数
+  const HORIZONTAL_SPACING = 280; // 水平间距（层级之间）
+  const VERTICAL_SPACING = 80;    // 垂直间距（同级节点之间）
+  const NODE_HEIGHT = 50;         // 节点估计高度
+  
+  // 计算子树高度（递归）
+  const calculateSubtreeHeight = (nodeId: string): number => {
+    const node = nodeMap.get(nodeId);
+    if (!node) return NODE_HEIGHT;
     
-    nodesInLevel.forEach((node, index) => {
-      const nodeInArray = positioned.find(n => n.id === node.id);
-      if (nodeInArray) {
-        nodeInArray.position = {
-          x: startX + index * 200,
-          y: level * 120 // 每层间隔120px
-        };
+    // 如果节点被折叠，只返回自身高度
+    if (node.collapsed) return NODE_HEIGHT;
+    
+    const children = positioned.filter(n => n.parentId === nodeId);
+    if (children.length === 0) return NODE_HEIGHT;
+    
+    let totalHeight = 0;
+    children.forEach((child, index) => {
+      totalHeight += calculateSubtreeHeight(child.id);
+      if (index < children.length - 1) {
+        totalHeight += VERTICAL_SPACING;
       }
     });
-  });
+    
+    return Math.max(NODE_HEIGHT, totalHeight);
+  };
+  
+  // 递归布局节点
+  const layoutNode = (nodeId: string, x: number, yStart: number): number => {
+    const node = nodeMap.get(nodeId);
+    if (!node) return yStart;
+    
+    const children = positioned.filter(n => n.parentId === nodeId);
+    const subtreeHeight = calculateSubtreeHeight(nodeId);
+    
+    // 如果没有子节点或被折叠，直接定位
+    if (children.length === 0 || node.collapsed) {
+      node.position = { x, y: yStart + subtreeHeight / 2 - NODE_HEIGHT / 2 };
+      return yStart + subtreeHeight;
+    }
+    
+    // 布局子节点
+    let currentY = yStart;
+    children.forEach((child, index) => {
+      currentY = layoutNode(child.id, x + HORIZONTAL_SPACING, currentY);
+      if (index < children.length - 1) {
+        currentY += VERTICAL_SPACING;
+      }
+    });
+    
+    // 父节点垂直居中于子节点
+    const firstChild = nodeMap.get(children[0].id);
+    const lastChild = nodeMap.get(children[children.length - 1].id);
+    if (firstChild?.position && lastChild?.position) {
+      const centerY = (firstChild.position.y + lastChild.position.y) / 2;
+      node.position = { x, y: centerY };
+    } else {
+      node.position = { x, y: yStart + subtreeHeight / 2 - NODE_HEIGHT / 2 };
+    }
+    
+    return currentY;
+  };
+  
+  // 从根节点开始布局
+  layoutNode(rootNode.id, 0, 0);
   
   return positioned;
+};
+
+// 过滤可见节点（处理折叠状态）
+const filterVisibleNodes = (nodes: MindMapNode[]): MindMapNode[] => {
+  const nodeMap = new Map<string, MindMapNode>();
+  nodes.forEach(node => nodeMap.set(node.id, node));
+  
+  // 检查节点是否应该被隐藏（任何祖先节点被折叠）
+  const isHidden = (nodeId: string): boolean => {
+    const node = nodeMap.get(nodeId);
+    if (!node || !node.parentId) return false;
+    
+    const parent = nodeMap.get(node.parentId);
+    if (!parent) return false;
+    
+    // 如果父节点被折叠，则隐藏
+    if (parent.collapsed) return true;
+    
+    // 递归检查祖先节点
+    return isHidden(node.parentId);
+  };
+  
+  return nodes.filter(node => !isHidden(node.id));
 };
 
 // 画布内部组件
@@ -132,53 +198,52 @@ const CanvasInner: React.FC = () => {
     y: 0,
     nodeId: null
   });
-  const [virtualizationResult, setVirtualizationResult] = useState<VirtualizationResult | null>(null);
   const { fitView } = useReactFlow();
-  const viewport = useViewport();
 
-  // 懒加载功能
-  const lazyLoading = useLazyLoading(currentMindMap?.nodes || [], {
-    enabled: (currentMindMap?.nodes.length || 0) > 100, // 超过100个节点时启用懒加载
-    initialLoadCount: 50,
-    batchSize: 25,
-    preloadDistance: 500
-  });
+  // 记录初始布局版本（仅在节点数量或折叠状态变化时更新）
+  const [layoutKey, setLayoutKey] = useState(0);
 
-  // 使用虚拟化渲染和懒加载优化的节点处理
+  // 计算折叠状态的签名，用于检测折叠变化
+  const collapseSignature = useMemo(() => {
+    if (!currentMindMap) return '';
+    return currentMindMap.nodes
+      .filter(n => n.collapsed)
+      .map(n => n.id)
+      .sort()
+      .join(',');
+  }, [currentMindMap]);
+
+  // 当节点数量或折叠状态变化时，触发重新布局
+  useEffect(() => {
+    setLayoutKey(k => k + 1);
+  }, [currentMindMap?.nodes.length, collapseSignature]);
+
+  // 处理节点数据：过滤折叠节点、计算布局
   const processedNodes = useMemo(() => {
     if (!currentMindMap) {
       return { nodes: [], edges: [] };
     }
 
-    // 使用懒加载的节点（如果启用）
-    const nodesToProcess = lazyLoading.config.enabled 
-      ? lazyLoading.loadedNodes 
-      : currentMindMap.nodes;
+    const nodesToProcess = currentMindMap.nodes;
 
-    // 如果节点没有位置信息，进行自动布局
-    const nodesWithPosition = nodesToProcess.some(node => !node.position)
-      ? calculateNodePositions(nodesToProcess)
-      : nodesToProcess;
+    // 1. 先过滤掉被折叠隐藏的节点
+    const visibleNodes = filterVisibleNodes(nodesToProcess);
 
-    // 执行虚拟化渲染
-    const viewportInfo = virtualizationService.calculateViewport(
-      [viewport.x, viewport.y, viewport.zoom],
-      { width: window.innerWidth, height: window.innerHeight }
-    );
+    // 2. 计算树形布局
+    const nodesWithPosition = calculateTreeLayout(visibleNodes);
 
-    const result = virtualizationService.virtualize(nodesWithPosition, viewportInfo);
-    setVirtualizationResult(result);
-
-    // 转换可见节点
-    const reactFlowNodes = result.visibleNodes.map(node => 
+    // 3. 转换为ReactFlow节点格式
+    const reactFlowNodes = nodesWithPosition.map(node => 
       convertToReactFlowNode(node)
     );
 
-    // 生成边（只为可见节点生成边）
-    const reactFlowEdges = generateEdges(result.visibleNodes);
+    // 4. 生成边连接
+    const reactFlowEdges = generateEdges(nodesWithPosition);
 
     return { nodes: reactFlowNodes, edges: reactFlowEdges };
-  }, [currentMindMap, lazyLoading.loadedNodes, lazyLoading.config.enabled, viewport.x, viewport.y, viewport.zoom, viewState.selectedNodeId]);
+    // 关键：只依赖layoutKey，不依赖currentMindMap的其他变化
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutKey]);
 
   // 将思维导图数据转换为ReactFlow格式
   useEffect(() => {
@@ -258,10 +323,12 @@ const CanvasInner: React.FC = () => {
 
   // 处理节点拖拽结束
   const onNodeDragStop = useCallback((_event: React.MouseEvent, node: Node) => {
-    // 更新节点位置到store
-    updateNode(node.id, {
-      position: node.position
-    });
+    // 安全检查：确保position存在后再更新到store
+    if (node.position && typeof node.position.x === 'number' && typeof node.position.y === 'number') {
+      updateNode(node.id, {
+        position: { x: node.position.x, y: node.position.y }
+      });
+    }
   }, [updateNode]);
 
   // 处理节点拖拽过程中
@@ -270,41 +337,13 @@ const CanvasInner: React.FC = () => {
     optimizedNodeDrag(event, node);
   }, [optimizedNodeDrag]);
 
-  // 处理视口变化，触发懒加载
-  useEffect(() => {
-    if (lazyLoading.config.enabled && lazyLoading.hasMore) {
-      const viewportCenter = {
-        x: -viewport.x / viewport.zoom + (window.innerWidth / 2) / viewport.zoom,
-        y: -viewport.y / viewport.zoom + (window.innerHeight / 2) / viewport.zoom
-      };
-      
-      const viewportSize = {
-        width: window.innerWidth / viewport.zoom,
-        height: window.innerHeight / viewport.zoom
-      };
 
-      // 延迟触发懒加载，避免频繁调用
-      const timeoutId = setTimeout(() => {
-        lazyLoading.loadByViewport(viewportCenter, viewportSize);
-      }, 200);
 
-      return () => clearTimeout(timeoutId);
-    }
-  }, [viewport.x, viewport.y, viewport.zoom, lazyLoading]);
-
-  // 处理节点变化
+  // 处理节点变化 - 只处理ReactFlow内部状态，不同步到store
+  // 位置同步在onNodeDragStop中处理，避免拖拽过程中频繁更新导致错误
   const handleNodesChange = useCallback((changes: NodeChange[]) => {
     onNodesChange(changes);
-    
-    // 同步位置变化到store
-    changes.forEach(change => {
-      if (change.type === 'position' && change.position) {
-        updateNode(change.id, {
-          position: change.position
-        });
-      }
-    });
-  }, [onNodesChange, updateNode]);
+  }, [onNodesChange]);
 
   // 处理边变化
   const handleEdgesChange = useCallback((changes: EdgeChange[]) => {
@@ -347,6 +386,12 @@ const CanvasInner: React.FC = () => {
         selectNodesOnDrag={false}
         multiSelectionKeyCode={null}
         deleteKeyCode={null}
+        zoomOnScroll={true}
+        zoomOnPinch={true}
+        panOnScroll={false}
+        panOnDrag={true}
+        minZoom={0.1}
+        maxZoom={4}
       >
         {/* 背景网格 */}
         <Background 
@@ -372,41 +417,7 @@ const CanvasInner: React.FC = () => {
         onClose={closeContextMenu}
       />
 
-      {/* 性能统计（开发模式下显示） */}
-      {process.env.NODE_ENV === 'development' && virtualizationResult && (
-        <div className="absolute top-4 right-4 bg-black bg-opacity-75 text-white text-xs p-2 rounded max-w-xs">
-          <div className="font-semibold mb-1">渲染性能</div>
-          
-          {/* 懒加载统计 */}
-          {lazyLoading.config.enabled && (
-            <div className="mb-2 border-b border-gray-600 pb-1">
-              <div className="text-blue-400 font-medium">懒加载</div>
-              <div>已加载: {lazyLoading.stats.loadedCount}/{lazyLoading.stats.totalNodes}</div>
-              <div>进度: {(lazyLoading.progress * 100).toFixed(1)}%</div>
-              <div>批次: {lazyLoading.stats.batchesLoaded}</div>
-              {lazyLoading.isLoading && (
-                <div className="text-yellow-400">正在加载...</div>
-              )}
-            </div>
-          )}
-          
-          {/* 虚拟化统计 */}
-          <div>
-            <div className="text-purple-400 font-medium">虚拟化</div>
-            <div>总节点: {virtualizationResult.totalNodes}</div>
-            <div>可见节点: {virtualizationResult.visibleNodes.length}</div>
-            {virtualizationResult.virtualizationEnabled && (
-              <>
-                <div>过滤节点: {virtualizationResult.stats.filteredNodes}</div>
-                <div>渲染耗时: {virtualizationResult.stats.renderTime.toFixed(2)}ms</div>
-              </>
-            )}
-            <div className={virtualizationResult.virtualizationEnabled ? "text-green-400" : "text-gray-400"}>
-              {virtualizationResult.virtualizationEnabled ? '已启用' : '未启用'}
-            </div>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 };

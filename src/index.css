@@ -29,3 +29,49 @@
     @apply bg-white rounded-lg shadow-sm border border-gray-200 p-6;
   }
 }
+
+/* ReactFlow 样式优化 */
+.react-flow {
+  width: 100%;
+  height: 100%;
+}
+
+.react-flow__renderer {
+  z-index: 1;
+}
+
+.react-flow__zoompane {
+  z-index: 0;
+}
+
+/* 确保控制按钮可点击 */
+.react-flow__controls,
+.react-flow__panel {
+  z-index: 50;
+  pointer-events: auto;
+}
+
+/* 优化连线样式 */
+.react-flow__edge-path {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 选中边的高亮效果 */
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #3b82f6;
+  stroke-width: 3;
+}
+
+/* 节点拖拽时的样式 */
+.react-flow__node.dragging {
+  z-index: 1000 !important;
+  opacity: 0.9;
+}
+
+/* 小地图样式优化 */
+.react-flow__minimap {
+  background-color: rgba(255, 255, 255, 0.9);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}

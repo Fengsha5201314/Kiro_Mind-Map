@@ -178,10 +178,11 @@ const MindMapNodeComponent: React.FC<NodeProps<NodeData>> = ({
           type="target"
           position={Position.Left}
           style={{
-            background: '#666',
-            width: '8px',
-            height: '8px',
-            border: '2px solid #fff'
+            background: '#64748b',
+            width: '10px',
+            height: '10px',
+            border: '2px solid #fff',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
           }}
         />
       )}
@@ -261,10 +262,11 @@ const MindMapNodeComponent: React.FC<NodeProps<NodeData>> = ({
         type="source"
         position={Position.Right}
         style={{
-          background: '#666',
-          width: '8px',
-          height: '8px',
-          border: '2px solid #fff'
+          background: '#64748b',
+          width: '10px',
+          height: '10px',
+          border: '2px solid #fff',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
         }}
       />
 

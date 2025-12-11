@@ -11,8 +11,9 @@ import {
   Maximize, 
   RotateCcw, 
   Move,
-
-  Download
+  Download,
+  Expand,
+  Minimize2
 } from 'lucide-react';
 import { useMindMapStore } from '../../stores/mindmapStore';
 import { ExportMenu } from '../Export/ExportMenu';
@@ -31,7 +32,9 @@ const MindMapControls: React.FC = () => {
   const { 
     currentMindMap,
     viewState,
-    setViewState 
+    setViewState,
+    expandAll,
+    collapseToLevel
   } = useMindMapStore();
 
   // 导出菜单状态
@@ -40,14 +43,20 @@ const MindMapControls: React.FC = () => {
 
   // 放大
   const handleZoomIn = () => {
-    zoomIn();
-    setViewState({ zoom: getZoom() });
+    zoomIn({ duration: 200 });
+    // 延迟获取缩放值，等待动画完成
+    setTimeout(() => {
+      setViewState({ zoom: getZoom() });
+    }, 250);
   };
 
   // 缩小
   const handleZoomOut = () => {
-    zoomOut();
-    setViewState({ zoom: getZoom() });
+    zoomOut({ duration: 200 });
+    // 延迟获取缩放值，等待动画完成
+    setTimeout(() => {
+      setViewState({ zoom: getZoom() });
+    }, 250);
   };
 
   // 适应视图
@@ -110,12 +119,12 @@ const MindMapControls: React.FC = () => {
     setIsExportMenuOpen(false);
   };
 
-  // 控制按钮样式
-  const buttonClass = "w-10 h-10 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 hover:shadow-md transition-all duration-200 flex items-center justify-center text-gray-600 hover:text-gray-800";
-  const disabledButtonClass = "w-10 h-10 bg-gray-100 border border-gray-200 rounded-lg shadow-sm flex items-center justify-center text-gray-400 cursor-not-allowed";
+  // 控制按钮样式 - 添加pointer-events确保可点击
+  const buttonClass = "w-10 h-10 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 hover:shadow-md transition-all duration-200 flex items-center justify-center text-gray-600 hover:text-gray-800 cursor-pointer select-none active:scale-95";
+  const disabledButtonClass = "w-10 h-10 bg-gray-100 border border-gray-200 rounded-lg shadow-sm flex items-center justify-center text-gray-400 cursor-not-allowed select-none";
 
   return (
-    <div className="absolute bottom-4 left-4 z-10 flex flex-col space-y-2">
+    <div className="absolute bottom-4 left-4 z-50 flex flex-col space-y-2" style={{ pointerEvents: 'auto' }}>
       {/* 缩放控制组 */}
       <div className="bg-white rounded-lg shadow-lg p-2 border border-gray-200">
         <div className="flex flex-col space-y-1">
@@ -174,6 +183,31 @@ const MindMapControls: React.FC = () => {
             title="重置视图 (1:1 缩放)"
           >
             <RotateCcw size={18} />
+          </button>
+        </div>
+      </div>
+
+      {/* 展开/折叠控制组 */}
+      <div className="bg-white rounded-lg shadow-lg p-2 border border-gray-200">
+        <div className="flex flex-col space-y-1">
+          {/* 展开全部按钮 */}
+          <button
+            onClick={() => expandAll()}
+            className={currentMindMap ? buttonClass : disabledButtonClass}
+            disabled={!currentMindMap}
+            title="展开所有节点"
+          >
+            <Expand size={18} />
+          </button>
+
+          {/* 折叠到一级按钮 */}
+          <button
+            onClick={() => collapseToLevel(1)}
+            className={currentMindMap ? buttonClass : disabledButtonClass}
+            disabled={!currentMindMap}
+            title="折叠到一级节点"
+          >
+            <Minimize2 size={18} />
           </button>
         </div>
       </div>
