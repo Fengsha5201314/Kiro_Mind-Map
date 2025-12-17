@@ -330,15 +330,6 @@ export class GeminiServiceImpl implements GeminiService {
   }
 
   /**
-   * 构建思维导图生成提示词（保留旧方法以兼容）
-   * @param content 输入内容
-   * @returns 结构化提示词
-   */
-  private buildMindMapPrompt(content: string): string {
-    return this.buildMindMapPromptWithTemplate(content, ContentType.GENERAL);
-  }
-
-  /**
    * 使用智能模板构建主题生成提示词
    * @param topic 主题文本
    * @param contentType 内容类型
@@ -351,15 +342,6 @@ export class GeminiServiceImpl implements GeminiService {
   }
 
   /**
-   * 构建主题生成提示词（保留旧方法以兼容）
-   * @param topic 主题文本
-   * @returns 结构化提示词
-   */
-  private buildTopicPrompt(topic: string): string {
-    return this.buildTopicPromptWithTemplate(topic, ContentType.GENERAL);
-  }
-
-  /**
    * 解析AI响应为思维导图结构
    * @param responseText AI响应文本
    * @returns 解析后的思维导图结构
@@ -369,19 +351,55 @@ export class GeminiServiceImpl implements GeminiService {
       // 清理响应文本，移除可能的markdown代码块标记
       let cleanedText = responseText.trim();
       
-      // 移除markdown代码块标记
-      if (cleanedText.startsWith('```json')) {
-        cleanedText = cleanedText.replace(/^```json\s*/, '');
+      // 移除markdown代码块标记（支持多种格式）
+      cleanedText = cleanedText.replace(/^```json\s*/i, '');
+      cleanedText = cleanedText.replace(/^```\s*/i, '');
+      cleanedText = cleanedText.replace(/\s*```$/i, '');
+      cleanedText = cleanedText.trim();
+      
+      // 尝试提取 JSON 对象（处理 AI 可能在 JSON 前后添加额外文本的情况）
+      const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        cleanedText = jsonMatch[0];
       }
-      if (cleanedText.startsWith('```')) {
-        cleanedText = cleanedText.replace(/^```\s*/, '');
-      }
-      if (cleanedText.endsWith('```')) {
-        cleanedText = cleanedText.replace(/\s*```$/, '');
-      }
+      
+      // 移除可能的 BOM 和其他不可见字符
+      cleanedText = cleanedText.replace(/^\uFEFF/, '');
+      cleanedText = cleanedText.replace(/[\x00-\x1F\x7F]/g, (char) => {
+        // 保留换行符和制表符
+        if (char === '\n' || char === '\r' || char === '\t') return char;
+        return '';
+      });
+
+      console.log('清理后的JSON文本:', cleanedText.substring(0, 500));
 
       // 尝试解析JSON
-      const parsed = JSON.parse(cleanedText);
+      let parsed;
+      try {
+        parsed = JSON.parse(cleanedText);
+      } catch (parseError) {
+        console.error('JSON解析错误，尝试修复常见问题...');
+        
+        // 尝试修复常见的 JSON 格式问题
+        // 1. 移除尾部逗号
+        cleanedText = cleanedText.replace(/,\s*([}\]])/g, '$1');
+        // 2. 修复单引号
+        cleanedText = cleanedText.replace(/'/g, '"');
+        // 3. 修复未转义的换行符
+        cleanedText = cleanedText.replace(/\n/g, '\\n');
+        cleanedText = cleanedText.replace(/\r/g, '\\r');
+        cleanedText = cleanedText.replace(/\t/g, '\\t');
+        
+        // 再次尝试解析
+        try {
+          // 恢复换行符用于 JSON 结构
+          cleanedText = cleanedText.replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t');
+          parsed = JSON.parse(cleanedText);
+        } catch (retryError) {
+          console.error('修复后仍然无法解析:', retryError);
+          throw parseError;
+        }
+      }
       
       // 验证解析结果的结构
       if (!parsed.title || !Array.isArray(parsed.nodes)) {
@@ -391,14 +409,19 @@ export class GeminiServiceImpl implements GeminiService {
       // 规范化节点结构（处理类型转换）
       this.normalizeNodeStructure(parsed.nodes);
 
+      console.log('解析成功，节点数量:', this.countNodes(parsed.nodes));
       return parsed as MindMapStructure;
     } catch (error) {
       console.error('解析AI响应失败:', error);
-      console.error('原始响应:', responseText);
+      console.error('原始响应:', responseText.substring(0, 1000));
+      
+      // 尝试从响应中提取有用信息创建简单结构
+      const titleMatch = responseText.match(/"title"\s*:\s*"([^"]+)"/);
+      const title = titleMatch ? titleMatch[1] : '解析失败';
       
       // 如果解析失败，返回一个默认结构
       return {
-        title: '解析失败',
+        title: title,
         nodes: [
           {
             content: '无法解析AI响应，请重试',
@@ -408,6 +431,19 @@ export class GeminiServiceImpl implements GeminiService {
         ]
       };
     }
+  }
+  
+  /**
+   * 统计节点总数（用于调试）
+   */
+  private countNodes(nodes: any[]): number {
+    let count = nodes.length;
+    for (const node of nodes) {
+      if (node.children && node.children.length > 0) {
+        count += this.countNodes(node.children);
+      }
+    }
+    return count;
   }
 
   /**

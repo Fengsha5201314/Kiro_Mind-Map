@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react';
 import { useMindMapStore } from '../../stores/mindmapStore';
-import { exportService, EXPORT_FORMATS, ExportFormat } from '../../services/exportService';
+import { exportService, EXPORT_FORMATS, EXPORT_STYLES, ExportFormat, ExportStyle, ExportOptions, NodePosition } from '../../services/exportService';
 
 interface ExportPanelProps {
   isOpen: boolean;
@@ -13,9 +13,10 @@ interface ExportPanelProps {
 }
 
 const ExportPanel: React.FC<ExportPanelProps> = ({ isOpen, onClose }) => {
-  const { currentMindMap } = useMindMapStore();
+  const { currentMindMap, currentTheme } = useMindMapStore();
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selectedStyle, setSelectedStyle] = useState<ExportStyle>('theme');
 
   // 处理导出
   const handleExport = async (format: ExportFormat) => {
@@ -31,7 +32,21 @@ const ExportPanel: React.FC<ExportPanelProps> = ({ isOpen, onClose }) => {
       const formatInfo = EXPORT_FORMATS.find(f => f.id === format);
       const filename = `${currentMindMap.title || '思维导图'}${formatInfo?.extension || '.txt'}`;
       
-      const blob = await exportService.export(currentMindMap, format);
+      // 构建导出选项
+      const options: ExportOptions = {
+        style: selectedStyle,
+        theme: currentTheme
+      };
+      
+      // 如果选择"当前主题"样式，尝试获取页面上的实际节点位置
+      if (selectedStyle === 'theme' && (format === 'svg' || format === 'png')) {
+        const nodePositions = getActualNodePositions();
+        if (nodePositions.length > 0) {
+          options.nodePositions = nodePositions;
+        }
+      }
+      
+      const blob = await exportService.export(currentMindMap, format, options);
       exportService.downloadFile(blob, filename);
       
       // 导出成功后关闭面板
@@ -44,6 +59,75 @@ const ExportPanel: React.FC<ExportPanelProps> = ({ isOpen, onClose }) => {
       setError(err instanceof Error ? err.message : '导出失败');
       setExporting(null);
     }
+  };
+  
+  // 获取页面上实际渲染的节点位置
+  // 优先使用 store 中保存的位置，如果没有则从 DOM 获取
+  const getActualNodePositions = (): NodePosition[] => {
+    if (!currentMindMap) return [];
+    
+    const positions: NodePosition[] = [];
+    
+    // 首先尝试从 store 中的节点数据获取位置
+    // 这些位置是用户拖拽后保存的实际位置
+    const nodesWithPosition = currentMindMap.nodes.filter(n => n.position);
+    
+    if (nodesWithPosition.length > 0) {
+      // 使用 store 中的位置数据
+      currentMindMap.nodes.forEach(node => {
+        if (node.position) {
+          // 估算节点宽度（与 Canvas.tsx 中的算法一致）
+          let charUnits = 0;
+          for (const char of node.content) {
+            charUnits += char.charCodeAt(0) > 127 ? 2 : 1;
+          }
+          const estimatedWidth = charUnits * 7 + 50;
+          const width = Math.min(Math.max(estimatedWidth, 120), 350);
+          
+          positions.push({
+            id: node.id,
+            x: node.position.x,
+            y: node.position.y,
+            width: width,
+            height: 50
+          });
+        }
+      });
+      
+      return positions;
+    }
+    
+    // 如果 store 中没有位置数据，从 DOM 获取
+    const nodeElements = document.querySelectorAll('.react-flow__node');
+    
+    nodeElements.forEach((el) => {
+      const nodeId = el.getAttribute('data-id');
+      if (!nodeId) return;
+      
+      // 获取节点的 transform 位置
+      const style = window.getComputedStyle(el);
+      const transform = style.transform;
+      
+      let x = 0, y = 0;
+      if (transform && transform !== 'none') {
+        // 解析 transform: translate(x, y) 或 matrix(...)
+        const matrixMatch = transform.match(/matrix\(([^)]+)\)/);
+        if (matrixMatch) {
+          const values = matrixMatch[1].split(',').map(v => parseFloat(v.trim()));
+          x = values[4] || 0;
+          y = values[5] || 0;
+        }
+      }
+      
+      // 获取节点尺寸
+      const rect = el.getBoundingClientRect();
+      const width = rect.width;
+      const height = rect.height;
+      
+      positions.push({ id: nodeId, x, y, width, height });
+    });
+    
+    return positions;
   };
 
   if (!isOpen) return null;
@@ -83,6 +167,51 @@ const ExportPanel: React.FC<ExportPanelProps> = ({ isOpen, onClose }) => {
               {error}
             </div>
           )}
+
+          {/* 图片导出样式选择 */}
+          <div className="mb-6">
+            <h3 className="text-sm font-medium text-gray-500 mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 bg-orange-500 rounded-full"></span>
+              图片导出样式（SVG/PNG）
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+              {EXPORT_STYLES.map(style => {
+                // 如果是"当前主题"样式，使用实际的主题颜色作为预览
+                const previewColors = style.id === 'theme' && currentTheme
+                  ? currentTheme.levels.slice(0, 4).map(l => l.backgroundColor)
+                  : style.preview;
+                
+                return (
+                  <button
+                    key={style.id}
+                    onClick={() => setSelectedStyle(style.id)}
+                    className={`p-3 rounded-lg border text-center transition-all ${
+                      selectedStyle === style.id
+                        ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200'
+                        : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {/* 颜色预览 */}
+                    <div className="flex justify-center gap-0.5 mb-2">
+                      {previewColors.map((color, index) => (
+                        <div
+                          key={index}
+                          className="w-4 h-4 rounded-sm"
+                          style={{ backgroundColor: color }}
+                        />
+                      ))}
+                    </div>
+                    <div className="text-xs font-medium text-gray-700">{style.name}</div>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-xs text-gray-400">
+              {selectedStyle === 'theme' 
+                ? `使用当前主题「${currentTheme?.name || '默认'}」的配色和布局导出`
+                : EXPORT_STYLES.find(s => s.id === selectedStyle)?.description}
+            </p>
+          </div>
 
           {/* 源文件格式 */}
           <div className="mb-6">
