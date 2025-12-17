@@ -174,7 +174,7 @@ describe('导出服务测试', () => {
 
       // 验证调用了html2canvas
       const html2canvas = await import('html2canvas');
-      expect(html2canvas.default).toHaveBeenCalledWith(mockCanvas, {
+      expect(html2canvas.default).toHaveBeenCalledWith(mockCanvas, expect.objectContaining({
         backgroundColor: '#ffffff',
         scale: 2,
         useCORS: true,
@@ -182,7 +182,8 @@ describe('导出服务测试', () => {
         logging: false,
         width: 800,
         height: 600
-      });
+        // onclone回调是可选的，用于处理oklch颜色转换
+      }));
     });
 
     it('应该在画布为空时抛出错误', async () => {

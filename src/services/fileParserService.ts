@@ -9,7 +9,20 @@ import mammoth from 'mammoth';
 import { fileCacheService } from './cacheService';
 
 // 设置PDF.js worker路径
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// 使用unpkg CDN，更稳定可靠
+// pdfjs-dist 4.x 版本需要使用 .mjs 后缀的ES模块worker
+const PDFJS_VERSION = pdfjsLib.version;
+console.log('PDF.js版本:', PDFJS_VERSION);
+
+// 尝试多个CDN源，提高可用性
+const workerSources = [
+  `https://unpkg.com/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`,
+  `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.mjs`,
+  `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.mjs`,
+];
+
+// 设置默认worker源
+pdfjsLib.GlobalWorkerOptions.workerSrc = workerSources[0];
 
 // 文件解析错误类
 export class FileParseError extends Error {
@@ -116,6 +129,57 @@ export interface FileParserService {
 export class FileParserServiceImpl implements FileParserService {
   
   /**
+   * 尝试使用不同的worker源加载PDF
+   * @param arrayBuffer PDF文件的ArrayBuffer
+   * @returns PDF文档对象
+   */
+  private async loadPDFWithFallback(arrayBuffer: ArrayBuffer): Promise<pdfjsLib.PDFDocumentProxy> {
+    let lastError: Error | null = null;
+    
+    for (let i = 0; i < workerSources.length; i++) {
+      try {
+        console.log(`尝试使用worker源 ${i + 1}/${workerSources.length}: ${workerSources[i]}`);
+        pdfjsLib.GlobalWorkerOptions.workerSrc = workerSources[i];
+        
+        const loadingTask = pdfjsLib.getDocument({ 
+          data: arrayBuffer,
+          // 禁用worker如果所有CDN都失败
+          disableAutoFetch: false,
+          disableStream: false,
+        });
+        
+        const pdf = await loadingTask.promise;
+        console.log(`成功使用worker源: ${workerSources[i]}`);
+        return pdf;
+      } catch (error) {
+        console.warn(`Worker源 ${workerSources[i]} 加载失败:`, error);
+        lastError = error instanceof Error ? error : new Error(String(error));
+        
+        // 如果是最后一个源，尝试禁用worker
+        if (i === workerSources.length - 1) {
+          console.log('所有CDN源失败，尝试禁用worker...');
+          try {
+            // 禁用worker，使用主线程解析（性能较差但更可靠）
+            pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+            const loadingTask = pdfjsLib.getDocument({ 
+              data: arrayBuffer,
+              disableAutoFetch: true,
+              disableStream: true,
+            });
+            const pdf = await loadingTask.promise;
+            console.log('成功使用主线程解析PDF');
+            return pdf;
+          } catch (fallbackError) {
+            console.error('主线程解析也失败:', fallbackError);
+          }
+        }
+      }
+    }
+    
+    throw lastError || new Error('无法加载PDF文档');
+  }
+
+  /**
    * 解析PDF文件
    */
   async parsePDF(file: File, onProgress?: ProgressCallback): Promise<ParseResult> {
@@ -127,8 +191,8 @@ export class FileParserServiceImpl implements FileParserService {
       
       onProgress?.(20, '正在加载PDF文档...');
       
-      // 加载PDF文档
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      // 使用回退机制加载PDF文档
+      const pdf = await this.loadPDFWithFallback(arrayBuffer);
       
       let fullText = '';
       const pageCount = pdf.numPages;
@@ -168,8 +232,10 @@ export class FileParserServiceImpl implements FileParserService {
       };
       
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      console.error('PDF解析失败:', errorMessage);
       throw new FileParseError(
-        `PDF解析失败: ${error instanceof Error ? error.message : '未知错误'}`,
+        `PDF解析失败: ${errorMessage}。请确保网络连接正常，或尝试使用其他格式的文件。`,
         file.name,
         'PDF',
         error instanceof Error ? error : undefined

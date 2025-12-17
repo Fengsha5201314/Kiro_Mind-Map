@@ -13,10 +13,13 @@ import {
   Move,
   Download,
   Expand,
-  Minimize2
+  Minimize2,
+  Undo2,
+  Redo2
 } from 'lucide-react';
 import { useMindMapStore } from '../../stores/mindmapStore';
 import { ExportMenu } from '../Export/ExportMenu';
+import ThemeSelector from './ThemeSelector';
 
 // 控制按钮组件
 const MindMapControls: React.FC = () => {
@@ -34,7 +37,11 @@ const MindMapControls: React.FC = () => {
     viewState,
     setViewState,
     expandAll,
-    collapseToLevel
+    collapseToLevel,
+    undo,
+    redo,
+    canUndo,
+    canRedo
   } = useMindMapStore();
 
   // 导出菜单状态
@@ -212,6 +219,31 @@ const MindMapControls: React.FC = () => {
         </div>
       </div>
 
+      {/* 撤销/重做控制组 */}
+      <div className="bg-white rounded-lg shadow-lg p-2 border border-gray-200">
+        <div className="flex flex-col space-y-1">
+          {/* 撤销按钮 */}
+          <button
+            onClick={() => undo()}
+            className={canUndo() ? buttonClass : disabledButtonClass}
+            disabled={!canUndo()}
+            title="撤销 (Ctrl+Z)"
+          >
+            <Undo2 size={18} />
+          </button>
+
+          {/* 重做按钮 */}
+          <button
+            onClick={() => redo()}
+            className={canRedo() ? buttonClass : disabledButtonClass}
+            disabled={!canRedo()}
+            title="重做 (Ctrl+Y)"
+          >
+            <Redo2 size={18} />
+          </button>
+        </div>
+      </div>
+
       {/* 导出控制组 */}
       <div className="bg-white rounded-lg shadow-lg p-2 border border-gray-200">
         <div className="flex flex-col space-y-1">
@@ -225,6 +257,11 @@ const MindMapControls: React.FC = () => {
             <Download size={18} />
           </button>
         </div>
+      </div>
+
+      {/* 主题选择器 */}
+      <div className="bg-white rounded-lg shadow-lg p-2 border border-gray-200">
+        <ThemeSelector />
       </div>
 
       {/* 信息显示 */}

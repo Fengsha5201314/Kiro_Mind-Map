@@ -22,6 +22,7 @@ import 'reactflow/dist/style.css';
 
 import { useMindMapStore } from '../../stores/mindmapStore';
 import { MindMapNode } from '../../types/mindmap';
+import { ThemeColors } from '../../types/theme';
 import MindMapNodeComponent from './Node';
 import MindMapControls from './Controls';
 import ContextMenu from './ContextMenu';
@@ -50,7 +51,7 @@ const convertToReactFlowNode = (mindMapNode: MindMapNode): Node => {
 };
 
 // 生成边连接 - 使用smoothstep实现类似豆包的直角折线效果
-const generateEdges = (nodes: MindMapNode[]): Edge[] => {
+const generateEdges = (nodes: MindMapNode[], theme: ThemeColors): Edge[] => {
   const edges: Edge[] = [];
   
   nodes.forEach(node => {
@@ -61,7 +62,7 @@ const generateEdges = (nodes: MindMapNode[]): Edge[] => {
         target: node.id,
         type: 'smoothstep', // 使用smoothstep实现直角折线
         style: {
-          stroke: '#94a3b8', // 柔和的灰色
+          stroke: theme.edgeColor,
           strokeWidth: 2
         },
         animated: false
@@ -72,11 +73,55 @@ const generateEdges = (nodes: MindMapNode[]): Edge[] => {
   return edges;
 };
 
-// 树形布局算法 - 基于父子关系的水平树形布局
+/**
+ * 专业级思维导图布局算法
+ * 
+ * 展示要求：
+ * 1. 根节点在左侧，子节点向右展开
+ * 2. 同层级节点 X 坐标相同（垂直对齐）
+ * 3. 节点之间绝对不重叠
+ * 4. 父节点垂直居中于其所有子节点
+ * 5. 连接线清晰，无交叉
+ * 6. 布局紧凑但不拥挤
+ */
+
+// 布局配置常量
+const LAYOUT_CONFIG = {
+  BASE_HORIZONTAL_SPACING: 300,  // 基础水平间距（增大以避免水平重叠）
+  CHAR_WIDTH: 14,                // 每个字符的估算宽度
+  MIN_NODE_WIDTH: 120,           // 最小节点宽度
+  MAX_NODE_WIDTH: 350,           // 最大节点宽度
+  NODE_HEIGHT: 50,               // 节点高度（增大以确保足够空间）
+  VERTICAL_GAP: 30,              // 节点间垂直间隙（固定值，确保不重叠）
+};
+
+// 估算节点宽度（基于内容长度）
+const estimateNodeWidth = (content: string): number => {
+  // 中文字符算2个单位，英文算1个单位
+  let charUnits = 0;
+  for (const char of content) {
+    charUnits += char.charCodeAt(0) > 127 ? 2 : 1;
+  }
+  const estimatedWidth = charUnits * (LAYOUT_CONFIG.CHAR_WIDTH / 2) + 50; // 50是padding
+  return Math.min(
+    Math.max(estimatedWidth, LAYOUT_CONFIG.MIN_NODE_WIDTH),
+    LAYOUT_CONFIG.MAX_NODE_WIDTH
+  );
+};
+
+/**
+ * 简洁可靠的树形布局算法
+ * 
+ * 核心思路：
+ * 1. 自底向上计算每个节点的子树所需高度
+ * 2. 自顶向下分配Y坐标，确保子树之间不重叠
+ * 3. 父节点Y坐标 = 其所有子节点Y坐标的中心
+ */
 const calculateTreeLayout = (nodes: MindMapNode[]): MindMapNode[] => {
   if (nodes.length === 0) return [];
   
-  const positioned = nodes.map(n => ({ ...n }));
+  // 复制节点数组，清除旧位置
+  const positioned = nodes.map(n => ({ ...n, position: undefined as { x: number; y: number } | undefined }));
   const nodeMap = new Map<string, MindMapNode>();
   positioned.forEach(node => nodeMap.set(node.id, node));
   
@@ -84,71 +129,111 @@ const calculateTreeLayout = (nodes: MindMapNode[]): MindMapNode[] => {
   const rootNode = positioned.find(n => n.level === 0);
   if (!rootNode) return positioned;
   
-  // 配置参数
-  const HORIZONTAL_SPACING = 280; // 水平间距（层级之间）
-  const VERTICAL_SPACING = 80;    // 垂直间距（同级节点之间）
-  const NODE_HEIGHT = 50;         // 节点估计高度
-  
-  // 计算子树高度（递归）
-  const calculateSubtreeHeight = (nodeId: string): number => {
+  // 获取节点的直接子节点（未折叠的）
+  const getChildren = (nodeId: string): MindMapNode[] => {
     const node = nodeMap.get(nodeId);
-    if (!node) return NODE_HEIGHT;
+    if (!node || node.collapsed) return [];
+    return positioned.filter(n => n.parentId === nodeId);
+  };
+  
+  // 计算每层的最大节点宽度
+  const levelMaxWidths = new Map<number, number>();
+  positioned.forEach(node => {
+    const width = estimateNodeWidth(node.content);
+    const currentMax = levelMaxWidths.get(node.level) || 0;
+    levelMaxWidths.set(node.level, Math.max(currentMax, width));
+  });
+  
+  // 计算每层的X坐标
+  const levelXPositions = new Map<number, number>();
+  let accumulatedX = 0;
+  const maxLevel = Math.max(...positioned.map(n => n.level));
+  for (let level = 0; level <= maxLevel; level++) {
+    levelXPositions.set(level, accumulatedX);
+    const levelWidth = levelMaxWidths.get(level) || LAYOUT_CONFIG.MIN_NODE_WIDTH;
+    accumulatedX += levelWidth + LAYOUT_CONFIG.BASE_HORIZONTAL_SPACING;
+  }
+  
+  // 存储每个节点子树的高度
+  const subtreeHeights = new Map<string, number>();
+  
+  /**
+   * 第一遍：自底向上计算子树高度
+   * 子树高度 = 所有子节点子树高度之和 + 子节点之间的间隙
+   * 叶子节点的子树高度 = 节点高度
+   */
+  const calcSubtreeHeight = (nodeId: string): number => {
+    const children = getChildren(nodeId);
     
-    // 如果节点被折叠，只返回自身高度
-    if (node.collapsed) return NODE_HEIGHT;
+    if (children.length === 0) {
+      // 叶子节点
+      subtreeHeights.set(nodeId, LAYOUT_CONFIG.NODE_HEIGHT);
+      return LAYOUT_CONFIG.NODE_HEIGHT;
+    }
     
-    const children = positioned.filter(n => n.parentId === nodeId);
-    if (children.length === 0) return NODE_HEIGHT;
-    
+    // 递归计算所有子节点的子树高度
     let totalHeight = 0;
     children.forEach((child, index) => {
-      totalHeight += calculateSubtreeHeight(child.id);
+      totalHeight += calcSubtreeHeight(child.id);
+      // 子节点之间添加间隙
       if (index < children.length - 1) {
-        totalHeight += VERTICAL_SPACING;
+        totalHeight += LAYOUT_CONFIG.VERTICAL_GAP;
       }
     });
     
-    return Math.max(NODE_HEIGHT, totalHeight);
+    subtreeHeights.set(nodeId, totalHeight);
+    return totalHeight;
   };
   
-  // 递归布局节点
-  const layoutNode = (nodeId: string, x: number, yStart: number): number => {
+  // 计算根节点的子树高度
+  calcSubtreeHeight(rootNode.id);
+  
+  /**
+   * 第二遍：自顶向下分配位置
+   * @param nodeId 节点ID
+   * @param x X坐标
+   * @param yTop 该节点子树可用空间的顶部Y坐标
+   */
+  const assignPosition = (nodeId: string, x: number, yTop: number): void => {
     const node = nodeMap.get(nodeId);
-    if (!node) return yStart;
+    if (!node) return;
     
-    const children = positioned.filter(n => n.parentId === nodeId);
-    const subtreeHeight = calculateSubtreeHeight(nodeId);
+    const children = getChildren(nodeId);
     
-    // 如果没有子节点或被折叠，直接定位
-    if (children.length === 0 || node.collapsed) {
-      node.position = { x, y: yStart + subtreeHeight / 2 - NODE_HEIGHT / 2 };
-      return yStart + subtreeHeight;
+    if (children.length === 0) {
+      // 叶子节点：直接放在子树空间的顶部
+      node.position = { x, y: yTop };
+      return;
     }
     
-    // 布局子节点
-    let currentY = yStart;
+    // 有子节点：先布局子节点，然后将父节点居中
+    const childX = levelXPositions.get(node.level + 1) || (x + LAYOUT_CONFIG.BASE_HORIZONTAL_SPACING);
+    let currentY = yTop;
+    
+    // 布局所有子节点
     children.forEach((child, index) => {
-      currentY = layoutNode(child.id, x + HORIZONTAL_SPACING, currentY);
+      const childSubtreeHeight = subtreeHeights.get(child.id) || LAYOUT_CONFIG.NODE_HEIGHT;
+      assignPosition(child.id, childX, currentY);
+      currentY += childSubtreeHeight;
       if (index < children.length - 1) {
-        currentY += VERTICAL_SPACING;
+        currentY += LAYOUT_CONFIG.VERTICAL_GAP;
       }
     });
     
-    // 父节点垂直居中于子节点
-    const firstChild = nodeMap.get(children[0].id);
-    const lastChild = nodeMap.get(children[children.length - 1].id);
-    if (firstChild?.position && lastChild?.position) {
-      const centerY = (firstChild.position.y + lastChild.position.y) / 2;
-      node.position = { x, y: centerY };
-    } else {
-      node.position = { x, y: yStart + subtreeHeight / 2 - NODE_HEIGHT / 2 };
-    }
+    // 父节点Y坐标 = 第一个子节点和最后一个子节点Y坐标的中点
+    const firstChild = children[0];
+    const lastChild = children[children.length - 1];
+    const firstChildY = firstChild.position?.y || yTop;
+    const lastChildY = lastChild.position?.y || yTop;
     
-    return currentY;
+    // 父节点居中于子节点
+    const parentY = (firstChildY + lastChildY) / 2;
+    node.position = { x, y: parentY };
   };
   
-  // 从根节点开始布局
-  layoutNode(rootNode.id, 0, 0);
+  // 从根节点开始分配位置
+  const rootX = levelXPositions.get(0) || 0;
+  assignPosition(rootNode.id, rootX, 0);
   
   return positioned;
 };
@@ -180,9 +265,9 @@ const filterVisibleNodes = (nodes: MindMapNode[]): MindMapNode[] => {
 const CanvasInner: React.FC = () => {
   const {
     currentMindMap,
-    viewState,
     setSelectedNode,
-    updateNode
+    updateNode,
+    currentTheme
   } = useMindMapStore();
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -200,23 +285,26 @@ const CanvasInner: React.FC = () => {
   });
   const { fitView } = useReactFlow();
 
-  // 记录初始布局版本（仅在节点数量或折叠状态变化时更新）
-  const [layoutKey, setLayoutKey] = useState(0);
+  // 使用ref存储用户手动拖拽的节点位置，避免被自动布局覆盖
+  const userDraggedPositions = React.useRef<Map<string, { x: number; y: number }>>(new Map());
+  
+  // 记录上一次的结构签名，用于检测结构变化
+  const prevStructureRef = React.useRef<string>('');
 
-  // 计算折叠状态的签名，用于检测折叠变化
-  const collapseSignature = useMemo(() => {
+  // 计算当前结构签名（节点ID + 折叠状态）
+  const structureSignature = useMemo(() => {
     if (!currentMindMap) return '';
-    return currentMindMap.nodes
+    
+    const visibleNodes = filterVisibleNodes(currentMindMap.nodes);
+    const nodeIds = visibleNodes.map(n => n.id).sort().join(',');
+    const collapseState = currentMindMap.nodes
       .filter(n => n.collapsed)
       .map(n => n.id)
       .sort()
-      .join(',');
+      .join('|');
+    
+    return `${nodeIds}::${collapseState}`;
   }, [currentMindMap]);
-
-  // 当节点数量或折叠状态变化时，触发重新布局
-  useEffect(() => {
-    setLayoutKey(k => k + 1);
-  }, [currentMindMap?.nodes.length, collapseSignature]);
 
   // 处理节点数据：过滤折叠节点、计算布局
   const processedNodes = useMemo(() => {
@@ -224,45 +312,123 @@ const CanvasInner: React.FC = () => {
       return { nodes: [], edges: [] };
     }
 
-    const nodesToProcess = currentMindMap.nodes;
-
     // 1. 先过滤掉被折叠隐藏的节点
-    const visibleNodes = filterVisibleNodes(nodesToProcess);
+    const visibleNodes = filterVisibleNodes(currentMindMap.nodes);
 
-    // 2. 计算树形布局
-    const nodesWithPosition = calculateTreeLayout(visibleNodes);
+    // 2. 检测结构是否变化
+    const structureChanged = prevStructureRef.current !== structureSignature;
+    
+    // 3. 判断是否需要重新布局
+    const needsLayout = structureChanged || visibleNodes.some(node => !node.position);
+    
+    let nodesWithPosition: MindMapNode[];
+    if (needsLayout) {
+      // 结构变化时，清除用户拖拽位置缓存，重新布局
+      if (structureChanged) {
+        userDraggedPositions.current.clear();
+        prevStructureRef.current = structureSignature;
+      }
+      nodesWithPosition = calculateTreeLayout(visibleNodes);
+    } else {
+      // 结构未变化，使用store中的位置（包含用户拖拽的位置）
+      nodesWithPosition = visibleNodes;
+    }
 
-    // 3. 转换为ReactFlow节点格式
+    // 4. 应用用户手动拖拽的位置（优先级最高）
+    nodesWithPosition = nodesWithPosition.map(node => {
+      const draggedPos = userDraggedPositions.current.get(node.id);
+      if (draggedPos) {
+        return { ...node, position: draggedPos };
+      }
+      return node;
+    });
+
+    // 5. 转换为ReactFlow节点格式
     const reactFlowNodes = nodesWithPosition.map(node => 
       convertToReactFlowNode(node)
     );
 
-    // 4. 生成边连接
-    const reactFlowEdges = generateEdges(nodesWithPosition);
+    // 6. 生成边连接（使用主题颜色）
+    const reactFlowEdges = generateEdges(nodesWithPosition, currentTheme);
 
     return { nodes: reactFlowNodes, edges: reactFlowEdges };
-    // 关键：只依赖layoutKey，不依赖currentMindMap的其他变化
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layoutKey]);
+  }, [currentMindMap, structureSignature, currentTheme]);
+
+  // 记录是否是首次加载
+  const isFirstLoad = React.useRef(true);
+  // 记录上一次的结构签名，用于useEffect中检测变化
+  const prevSignatureForEffect = React.useRef<string>('');
+
+  // 获取撤销/重做方法
+  const { undo, redo, canUndo, canRedo, deleteNode, viewState } = useMindMapStore();
+
+  // 键盘快捷键处理
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+Z 撤销
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        if (canUndo()) {
+          undo();
+        }
+      }
+      // Ctrl+Y 或 Ctrl+Shift+Z 重做
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        if (canRedo()) {
+          redo();
+        }
+      }
+      // Delete 或 Backspace 删除选中节点
+      if ((e.key === 'Delete' || e.key === 'Backspace') && viewState.selectedNodeId) {
+        // 检查是否在编辑状态
+        const activeElement = document.activeElement;
+        if (activeElement?.tagName === 'INPUT' || activeElement?.tagName === 'TEXTAREA') {
+          return; // 在输入框中不处理删除
+        }
+        e.preventDefault();
+        const selectedNode = currentMindMap?.nodes.find(n => n.id === viewState.selectedNodeId);
+        if (selectedNode && selectedNode.level > 0) {
+          deleteNode(viewState.selectedNodeId);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo, canUndo, canRedo, deleteNode, viewState.selectedNodeId, currentMindMap]);
 
   // 将思维导图数据转换为ReactFlow格式
   useEffect(() => {
     if (!currentMindMap) {
       setNodes([]);
       setEdges([]);
+      isFirstLoad.current = true;
+      prevSignatureForEffect.current = '';
       return;
     }
 
-    setNodes(processedNodes.nodes);
-    setEdges(processedNodes.edges);
+    // 检测结构是否变化
+    const structureChanged = prevSignatureForEffect.current !== structureSignature;
+    
+    // 在结构变化或首次加载时更新节点
+    if (structureChanged || isFirstLoad.current) {
+      prevSignatureForEffect.current = structureSignature;
+      setNodes(processedNodes.nodes);
+      setEdges(processedNodes.edges);
 
-    // 如果是新加载的思维导图，自动适应视图
-    if (processedNodes.nodes.length > 0 && !viewState.selectedNodeId) {
-      setTimeout(() => {
-        fitView({ padding: 0.1 });
-      }, 100);
+      // 自动适应视图（首次加载或结构变化时）
+      if (processedNodes.nodes.length > 0) {
+        if (isFirstLoad.current) {
+          isFirstLoad.current = false;
+        }
+        // 延迟执行fitView，确保节点已渲染
+        setTimeout(() => {
+          fitView({ padding: 0.15, duration: 300 });
+        }, 50);
+      }
     }
-  }, [processedNodes, setNodes, setEdges, fitView, currentMindMap, viewState.selectedNodeId]);
+  }, [processedNodes, structureSignature, setNodes, setEdges, fitView, currentMindMap]);
 
   // 处理节点选择
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
@@ -323,11 +489,15 @@ const CanvasInner: React.FC = () => {
 
   // 处理节点拖拽结束
   const onNodeDragStop = useCallback((_event: React.MouseEvent, node: Node) => {
-    // 安全检查：确保position存在后再更新到store
+    // 安全检查：确保position存在后再更新
     if (node.position && typeof node.position.x === 'number' && typeof node.position.y === 'number') {
-      updateNode(node.id, {
-        position: { x: node.position.x, y: node.position.y }
-      });
+      const newPosition = { x: node.position.x, y: node.position.y };
+      
+      // 保存到用户拖拽位置缓存（优先级最高，不会被自动布局覆盖）
+      userDraggedPositions.current.set(node.id, newPosition);
+      
+      // 同时更新到store（用于持久化）
+      updateNode(node.id, { position: newPosition });
     }
   }, [updateNode]);
 

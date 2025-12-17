@@ -5,10 +5,12 @@
 
 import { create } from 'zustand';
 import { MindMapData, MindMapNode, ViewState } from '../types/mindmap';
+import { ThemeColors, THEME_PRESETS, getThemeById } from '../types/theme';
+import { LayoutMode } from '../types/layout';
 
 // 生成唯一ID的工具函数
 const generateId = (): string => {
-  return Date.now().toString(36) + Math.random().toString(36).substr(2);
+  return Date.now().toString(36) + Math.random().toString(36).substring(2);
 };
 
 // 递归删除节点及其所有子节点
@@ -85,6 +87,18 @@ const updateParentChildRelation = (
   });
 };
 
+// 历史记录最大长度
+const MAX_HISTORY_LENGTH = 50;
+
+// 生成状态枚举
+export enum GenerationStatus {
+  IDLE = 'idle',
+  GENERATING = 'generating',
+  COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+  ERROR = 'error'
+}
+
 // MindMap Store 接口定义
 interface MindMapStore {
   // 状态
@@ -93,11 +107,38 @@ interface MindMapStore {
   error: string | null;
   viewState: ViewState;
   
+  // 流式生成状态
+  generationStatus: GenerationStatus;
+  generationProgress: number; // 0-100
+  
+  // 主题配色
+  currentTheme: ThemeColors;
+  availableThemes: ThemeColors[];
+  
+  // 布局模式
+  currentLayout: LayoutMode;
+  
+  // 历史记录（用于撤销/重做）
+  history: MindMapData[];
+  historyIndex: number;
+  
   // 基础操作
   setMindMap: (data: MindMapData) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   clear: () => void;
+  
+  // 流式生成操作
+  setGenerationStatus: (status: GenerationStatus) => void;
+  setGenerationProgress: (progress: number) => void;
+  updatePartialMindMap: (partialData: Partial<MindMapData>) => void;
+  addNodesIncremental: (nodes: MindMapNode[]) => void;
+  
+  // 主题操作
+  setTheme: (themeId: string) => void;
+  
+  // 布局操作
+  setLayout: (layout: LayoutMode) => void;
   
   // 节点操作
   updateNode: (nodeId: string, updates: Partial<MindMapNode>) => void;
@@ -107,6 +148,12 @@ interface MindMapStore {
   toggleNodeCollapse: (nodeId: string) => void;
   expandAll: () => void;
   collapseToLevel: (level: number) => void;
+  
+  // 撤销/重做
+  undo: () => void;
+  redo: () => void;
+  canUndo: () => boolean;
+  canRedo: () => boolean;
   
   // 视图状态操作
   setViewState: (viewState: Partial<ViewState>) => void;
@@ -119,6 +166,30 @@ interface MindMapStore {
   getChildNodes: (parentId: string) => MindMapNode[];
   getNodePath: (nodeId: string) => MindMapNode[];
 }
+
+// 保存历史记录的辅助函数
+const saveToHistory = (
+  currentMindMap: MindMapData | null,
+  history: MindMapData[],
+  historyIndex: number
+): { history: MindMapData[]; historyIndex: number } => {
+  if (!currentMindMap) return { history, historyIndex };
+  
+  // 如果当前不在历史末尾，删除后面的记录
+  const newHistory = history.slice(0, historyIndex + 1);
+  
+  // 深拷贝当前状态
+  const snapshot = JSON.parse(JSON.stringify(currentMindMap));
+  newHistory.push(snapshot);
+  
+  // 限制历史记录长度
+  if (newHistory.length > MAX_HISTORY_LENGTH) {
+    newHistory.shift();
+    return { history: newHistory, historyIndex: newHistory.length - 1 };
+  }
+  
+  return { history: newHistory, historyIndex: newHistory.length - 1 };
+};
 
 // 创建 MindMap Store
 export const useMindMapStore = create<MindMapStore>((set, get) => ({
@@ -133,12 +204,29 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     selectedNodeId: undefined,
     editingNodeId: undefined
   },
+  
+  // 流式生成状态
+  generationStatus: GenerationStatus.IDLE,
+  generationProgress: 0,
+  
+  // 主题配色
+  currentTheme: THEME_PRESETS[0],
+  availableThemes: THEME_PRESETS,
+  
+  // 布局模式
+  currentLayout: LayoutMode.HORIZONTAL_TREE,
+  
+  history: [],
+  historyIndex: -1,
 
   // 基础操作
   setMindMap: (data: MindMapData) => {
+    const snapshot = JSON.parse(JSON.stringify(data));
     set({
       currentMindMap: data,
       error: null,
+      history: [snapshot],
+      historyIndex: 0,
       viewState: {
         zoom: 1,
         centerX: 0,
@@ -172,10 +260,43 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     });
   },
 
+  // 主题操作
+  setTheme: (themeId: string) => {
+    const theme = getThemeById(themeId);
+    set({ currentTheme: theme });
+  },
+
+  // 布局操作
+  setLayout: (layout: LayoutMode) => {
+    const { currentMindMap } = get();
+    
+    // 清除所有节点的位置信息，强制重新布局
+    if (currentMindMap) {
+      const updatedNodes = currentMindMap.nodes.map(node => ({
+        ...node,
+        position: undefined
+      }));
+      
+      set({
+        currentLayout: layout,
+        currentMindMap: {
+          ...currentMindMap,
+          nodes: updatedNodes,
+          updatedAt: Date.now()
+        }
+      });
+    } else {
+      set({ currentLayout: layout });
+    }
+  },
+
   // 节点操作
   updateNode: (nodeId: string, updates: Partial<MindMapNode>) => {
-    const { currentMindMap } = get();
+    const { currentMindMap, history, historyIndex } = get();
     if (!currentMindMap) return;
+
+    // 检查是否只是位置更新（不保存到历史）
+    const isPositionOnlyUpdate = Object.keys(updates).length === 1 && 'position' in updates;
 
     const updatedNodes = currentMindMap.nodes.map(node => {
       if (node.id === nodeId) {
@@ -188,17 +309,23 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
       return node;
     });
 
-    set({
-      currentMindMap: {
-        ...currentMindMap,
-        nodes: updatedNodes,
-        updatedAt: Date.now()
-      }
-    });
+    const newMindMap = {
+      ...currentMindMap,
+      nodes: updatedNodes,
+      updatedAt: Date.now()
+    };
+
+    // 位置更新不保存历史（避免拖拽时产生大量历史记录）
+    if (isPositionOnlyUpdate) {
+      set({ currentMindMap: newMindMap });
+    } else {
+      const { history: newHistory, historyIndex: newIndex } = saveToHistory(newMindMap, history, historyIndex);
+      set({ currentMindMap: newMindMap, history: newHistory, historyIndex: newIndex });
+    }
   },
 
   addNode: (parentId: string, content: string) => {
-    const { currentMindMap } = get();
+    const { currentMindMap, history, historyIndex } = get();
     if (!currentMindMap) return;
 
     const parentNode = currentMindMap.nodes.find(node => node.id === parentId);
@@ -231,17 +358,18 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     // 添加新节点
     updatedNodes.push(newNode);
 
-    set({
-      currentMindMap: {
-        ...currentMindMap,
-        nodes: updatedNodes,
-        updatedAt: Date.now()
-      }
-    });
+    const newMindMap = {
+      ...currentMindMap,
+      nodes: updatedNodes,
+      updatedAt: Date.now()
+    };
+
+    const { history: newHistory, historyIndex: newIndex } = saveToHistory(newMindMap, history, historyIndex);
+    set({ currentMindMap: newMindMap, history: newHistory, historyIndex: newIndex });
   },
 
   deleteNode: (nodeId: string) => {
-    const { currentMindMap } = get();
+    const { currentMindMap, history, historyIndex } = get();
     if (!currentMindMap) return;
 
     // 不允许删除根节点
@@ -250,13 +378,14 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
 
     const updatedNodes = deleteNodeRecursively(currentMindMap.nodes, nodeId);
 
-    set({
-      currentMindMap: {
-        ...currentMindMap,
-        nodes: updatedNodes,
-        updatedAt: Date.now()
-      }
-    });
+    const newMindMap = {
+      ...currentMindMap,
+      nodes: updatedNodes,
+      updatedAt: Date.now()
+    };
+
+    const { history: newHistory, historyIndex: newIndex } = saveToHistory(newMindMap, history, historyIndex);
+    set({ currentMindMap: newMindMap, history: newHistory, historyIndex: newIndex });
   },
 
   moveNode: (nodeId: string, newParentId: string) => {
@@ -310,15 +439,20 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     const { currentMindMap } = get();
     if (!currentMindMap) return;
 
+    // 清除所有节点的位置，强制重新布局
     const updatedNodes = currentMindMap.nodes.map(node => {
       if (node.id === nodeId) {
         return {
           ...node,
           collapsed: !node.collapsed,
+          position: undefined, // 清除位置
           updatedAt: Date.now()
         };
       }
-      return node;
+      return {
+        ...node,
+        position: undefined // 清除所有节点位置以重新布局
+      };
     });
 
     set({
@@ -330,7 +464,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     });
   },
 
-  // 展开所有节点
+  // 展开所有节点 - 清除位置信息以强制重新布局
   expandAll: () => {
     const { currentMindMap } = get();
     if (!currentMindMap) return;
@@ -338,6 +472,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     const updatedNodes = currentMindMap.nodes.map(node => ({
       ...node,
       collapsed: false,
+      position: undefined, // 清除位置，强制重新布局
       updatedAt: Date.now()
     }));
 
@@ -350,7 +485,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
     });
   },
 
-  // 折叠到指定层级（只显示该层级及以上的节点）
+  // 折叠到指定层级（只显示该层级及以上的节点）- 清除位置以强制重新布局
   collapseToLevel: (level: number) => {
     const { currentMindMap } = get();
     if (!currentMindMap) return;
@@ -359,6 +494,7 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
       ...node,
       // 如果节点层级 >= 指定层级，则折叠该节点（隐藏其子节点）
       collapsed: node.level >= level,
+      position: undefined, // 清除位置，强制重新布局
       updatedAt: Date.now()
     }));
 
@@ -369,6 +505,46 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
         updatedAt: Date.now()
       }
     });
+  },
+
+  // 撤销
+  undo: () => {
+    const { history, historyIndex } = get();
+    if (historyIndex <= 0) return;
+    
+    const newIndex = historyIndex - 1;
+    const previousState = JSON.parse(JSON.stringify(history[newIndex]));
+    
+    set({
+      currentMindMap: previousState,
+      historyIndex: newIndex
+    });
+  },
+
+  // 重做
+  redo: () => {
+    const { history, historyIndex } = get();
+    if (historyIndex >= history.length - 1) return;
+    
+    const newIndex = historyIndex + 1;
+    const nextState = JSON.parse(JSON.stringify(history[newIndex]));
+    
+    set({
+      currentMindMap: nextState,
+      historyIndex: newIndex
+    });
+  },
+
+  // 检查是否可以撤销
+  canUndo: () => {
+    const { historyIndex } = get();
+    return historyIndex > 0;
+  },
+
+  // 检查是否可以重做
+  canRedo: () => {
+    const { history, historyIndex } = get();
+    return historyIndex < history.length - 1;
   },
 
   // 视图状态操作
@@ -400,6 +576,69 @@ export const useMindMapStore = create<MindMapStore>((set, get) => ({
         editingNodeId: nodeId
       }
     });
+  },
+
+  // 流式生成操作
+  setGenerationStatus: (status: GenerationStatus) => {
+    set({ generationStatus: status });
+  },
+
+  setGenerationProgress: (progress: number) => {
+    set({ generationProgress: Math.min(100, Math.max(0, progress)) });
+  },
+
+  updatePartialMindMap: (partialData: Partial<MindMapData>) => {
+    const { currentMindMap } = get();
+    
+    if (!currentMindMap) {
+      // 如果还没有思维导图，创建一个新的
+      const newMindMap: MindMapData = {
+        id: generateId(),
+        title: partialData.title || '生成中...',
+        nodes: partialData.nodes || [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        metadata: partialData.metadata
+      };
+      set({ currentMindMap: newMindMap });
+    } else {
+      // 更新现有思维导图
+      const updatedMindMap = {
+        ...currentMindMap,
+        ...partialData,
+        updatedAt: Date.now()
+      };
+      set({ currentMindMap: updatedMindMap });
+    }
+  },
+
+  addNodesIncremental: (newNodes: MindMapNode[]) => {
+    const { currentMindMap } = get();
+    
+    if (!currentMindMap) {
+      // 创建新的思维导图
+      const mindMap: MindMapData = {
+        id: generateId(),
+        title: '生成中...',
+        nodes: newNodes,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      set({ currentMindMap: mindMap });
+    } else {
+      // 增量添加节点（避免重复）
+      const existingIds = new Set(currentMindMap.nodes.map(n => n.id));
+      const nodesToAdd = newNodes.filter(n => !existingIds.has(n.id));
+      
+      if (nodesToAdd.length > 0) {
+        const updatedMindMap = {
+          ...currentMindMap,
+          nodes: [...currentMindMap.nodes, ...nodesToAdd],
+          updatedAt: Date.now()
+        };
+        set({ currentMindMap: updatedMindMap });
+      }
+    }
   },
 
   // 工具方法

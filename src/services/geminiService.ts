@@ -12,18 +12,22 @@ import {
 import { MindMapStructure } from '../types/mindmap';
 import { apiCacheService } from './cacheService';
 import { useSettingsStore } from '../stores/settingsStore';
+import { ContentType } from '../types/contentType';
+import { contentTypeDetector } from './contentTypeDetector';
+import { promptTemplateManager } from './promptTemplateManager';
 
 // Gemini API基础URL（使用v1beta版本以支持最新模型）
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
 /**
  * Gemini API服务实现类
- * 使用REST API直接调用，支持gemini-3-pro-preview等最新模型
+ * 使用REST API直接调用，支持最新的Gemini模型
+ * 参考: https://ai.google.dev/gemini-api/docs/gemini-3
  */
 export class GeminiServiceImpl implements GeminiService {
   // 默认配置
   private readonly defaultConfig = {
-    model: 'gemini-3-pro-preview', // 使用最新的Gemini 3预览版模型
+    model: 'gemini-3-pro-preview', // 使用最新的Gemini 3 Pro预览版模型
     temperature: 0.7,
     topK: 40,
     topP: 0.95,
@@ -32,15 +36,15 @@ export class GeminiServiceImpl implements GeminiService {
   };
 
   // 支持的模型列表（按优先级排序，用于回退）
-  // 参考: https://ai.google.dev/gemini-api/docs/models
   // 参考: https://ai.google.dev/gemini-api/docs/gemini-3
+  // 参考: https://ai.google.dev/gemini-api/docs/models
   private readonly supportedModels = [
-    'gemini-3-pro-preview',       // 最新 Gemini 3 Pro 预览版
-    'gemini-2.0-flash',           // 稳定版 Gemini 2.0 Flash
-    'gemini-2.0-flash-lite',      // 轻量版 Gemini 2.0 Flash
-    'gemini-1.5-flash',           // Gemini 1.5 Flash
-    'gemini-1.5-pro',             // Gemini 1.5 Pro
-    'gemini-pro'                  // 旧版 Gemini Pro
+    'gemini-3-pro-preview',       // Gemini 3 Pro 预览版 - 最新最强
+    'gemini-2.5-flash',           // Gemini 2.5 Flash - 稳定版
+    'gemini-2.5-pro',             // Gemini 2.5 Pro - 高级思考模型
+    'gemini-2.0-flash',           // Gemini 2.0 Flash - 稳定版
+    'gemini-1.5-flash',           // Gemini 1.5 Flash - 旧版兼容
+    'gemini-1.5-pro'              // Gemini 1.5 Pro - 旧版兼容
   ];
 
   /**
@@ -188,12 +192,17 @@ export class GeminiServiceImpl implements GeminiService {
   }
 
   /**
-   * 根据内容生成思维导图
+   * 根据内容生成思维导图（支持智能内容类型检测）
    * @param content 输入内容
    * @param apiKey API密钥
+   * @param contentType 可选的内容类型（如果不提供则自动检测）
    * @returns 生成的思维导图结构
    */
-  async generateMindMap(content: string, apiKey: string): Promise<MindMapStructure> {
+  async generateMindMap(
+    content: string, 
+    apiKey: string,
+    contentType?: ContentType
+  ): Promise<MindMapStructure> {
     try {
       if (!content || content.trim().length === 0) {
         throw this.createApiError('INVALID_INPUT', '输入内容不能为空');
@@ -203,11 +212,20 @@ export class GeminiServiceImpl implements GeminiService {
         throw this.createApiError('INVALID_API_KEY', 'API密钥不能为空');
       }
 
+      // 自动检测内容类型（如果未提供）
+      let detectedType = contentType;
+      if (!detectedType) {
+        const detection = contentTypeDetector.detectContentType(content);
+        detectedType = detection.type;
+        console.log('检测到内容类型:', detectedType, '置信度:', detection.confidence);
+      }
+
       // 检查缓存
       const cacheKey = 'generateMindMap';
       const cacheParams = { 
         content: content.substring(0, 1000),
-        contentHash: this.hashContent(content)
+        contentHash: this.hashContent(content),
+        contentType: detectedType
       };
       
       const cachedResult = apiCacheService.getAPIResponse<MindMapStructure>(cacheKey, cacheParams);
@@ -216,7 +234,8 @@ export class GeminiServiceImpl implements GeminiService {
         return cachedResult;
       }
 
-      const prompt = this.buildMindMapPrompt(content);
+      // 使用智能提示词模板
+      const prompt = this.buildMindMapPromptWithTemplate(content, detectedType);
       
       // 使用REST API直接调用
       const responseText = await this.tryWithDifferentModels(apiKey, prompt);
@@ -234,12 +253,17 @@ export class GeminiServiceImpl implements GeminiService {
   }
 
   /**
-   * 根据主题生成思维导图
+   * 根据主题生成思维导图（支持智能内容类型）
    * @param topic 主题文本
    * @param apiKey API密钥
+   * @param contentType 可选的内容类型
    * @returns 生成的思维导图结构
    */
-  async generateFromTopic(topic: string, apiKey: string): Promise<MindMapStructure> {
+  async generateFromTopic(
+    topic: string, 
+    apiKey: string,
+    contentType?: ContentType
+  ): Promise<MindMapStructure> {
     console.log('开始生成主题思维导图:', { topic, hasApiKey: !!apiKey });
     
     try {
@@ -253,11 +277,15 @@ export class GeminiServiceImpl implements GeminiService {
         throw this.createApiError('INVALID_API_KEY', 'API密钥不能为空');
       }
 
+      // 使用通用类型或指定类型
+      const type = contentType || ContentType.GENERAL;
+
       // 检查缓存
       const cacheKey = 'generateFromTopic';
       const cacheParams = { 
         topic: topic.trim(),
-        topicHash: this.hashContent(topic)
+        topicHash: this.hashContent(topic),
+        contentType: type
       };
       
       const cachedResult = apiCacheService.getAPIResponse<MindMapStructure>(cacheKey, cacheParams);
@@ -266,7 +294,8 @@ export class GeminiServiceImpl implements GeminiService {
         return cachedResult;
       }
 
-      const prompt = this.buildTopicPrompt(topic);
+      // 使用智能提示词模板
+      const prompt = this.buildTopicPromptWithTemplate(topic, type);
       console.log('构建的提示词:', prompt.substring(0, 200) + '...');
       
       // 使用REST API直接调用
@@ -291,92 +320,43 @@ export class GeminiServiceImpl implements GeminiService {
   }
 
   /**
-   * 构建思维导图生成提示词
+   * 使用智能模板构建思维导图生成提示词
+   * @param content 输入内容
+   * @param contentType 内容类型
+   * @returns 结构化提示词
+   */
+  private buildMindMapPromptWithTemplate(content: string, contentType: ContentType): string {
+    return promptTemplateManager.buildFullPrompt(contentType, content);
+  }
+
+  /**
+   * 构建思维导图生成提示词（保留旧方法以兼容）
    * @param content 输入内容
    * @returns 结构化提示词
    */
   private buildMindMapPrompt(content: string): string {
-    return `
-请将以下内容转换为思维导图结构。请严格按照以下JSON格式返回，不要包含任何其他文字说明：
-
-{
-  "title": "思维导图标题",
-  "nodes": [
-    {
-      "content": "根节点内容",
-      "level": 0,
-      "children": [
-        {
-          "content": "子节点内容",
-          "level": 1,
-          "children": [
-            {
-              "content": "孙节点内容",
-              "level": 2,
-              "children": []
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-
-要求：
-1. 提取内容的核心主题作为标题
-2. 识别主要概念和子概念的层次关系
-3. 每个节点的content应该简洁明了
-4. level从0开始，表示节点层级
-5. 最多不超过5层深度
-6. 确保返回的是有效的JSON格式
-
-输入内容：
-${content}
-`;
+    return this.buildMindMapPromptWithTemplate(content, ContentType.GENERAL);
   }
 
   /**
-   * 构建主题生成提示词
+   * 使用智能模板构建主题生成提示词
+   * @param topic 主题文本
+   * @param contentType 内容类型
+   * @returns 结构化提示词
+   */
+  private buildTopicPromptWithTemplate(topic: string, contentType: ContentType): string {
+    // 为主题生成构建特殊的内容文本
+    const content = `请根据主题"${topic}"生成一个详细的思维导图。`;
+    return promptTemplateManager.buildFullPrompt(contentType, content);
+  }
+
+  /**
+   * 构建主题生成提示词（保留旧方法以兼容）
    * @param topic 主题文本
    * @returns 结构化提示词
    */
   private buildTopicPrompt(topic: string): string {
-    return `
-请根据主题"${topic}"生成一个详细的思维导图结构。请严格按照以下JSON格式返回，不要包含任何其他文字说明：
-
-{
-  "title": "思维导图标题",
-  "nodes": [
-    {
-      "content": "根节点内容",
-      "level": 0,
-      "children": [
-        {
-          "content": "子节点内容",
-          "level": 1,
-          "children": [
-            {
-              "content": "孙节点内容",
-              "level": 2,
-              "children": []
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-
-要求：
-1. 以"${topic}"为核心主题
-2. 生成相关的主要分支和子分支
-3. 包含该主题的关键概念、特点、应用等方面
-4. 每个节点的content应该简洁明了
-5. level从0开始，表示节点层级
-6. 生成3-5层的层次结构
-7. 确保返回的是有效的JSON格式
-8. 内容要丰富且有逻辑性
-`;
+    return this.buildTopicPromptWithTemplate(topic, ContentType.GENERAL);
   }
 
   /**
@@ -408,8 +388,8 @@ ${content}
         throw new Error('响应格式不正确：缺少title或nodes字段');
       }
 
-      // 验证节点结构
-      this.validateNodeStructure(parsed.nodes);
+      // 规范化节点结构（处理类型转换）
+      this.normalizeNodeStructure(parsed.nodes);
 
       return parsed as MindMapStructure;
     } catch (error) {
@@ -431,24 +411,35 @@ ${content}
   }
 
   /**
-   * 验证节点结构的有效性
+   * 规范化节点结构（处理类型转换和默认值）
+   * AI 返回的 JSON 可能存在类型不一致的情况，这里进行统一处理
    * @param nodes 节点数组
    */
-  private validateNodeStructure(nodes: any[]): void {
+  private normalizeNodeStructure(nodes: any[]): void {
     for (const node of nodes) {
-      if (typeof node.content !== 'string') {
-        throw new Error('节点content必须是字符串');
-      }
-      if (typeof node.level !== 'number') {
-        throw new Error('节点level必须是数字');
-      }
-      if (!Array.isArray(node.children)) {
-        throw new Error('节点children必须是数组');
+      // 确保 content 是字符串
+      if (node.content === undefined || node.content === null) {
+        node.content = '';
+      } else if (typeof node.content !== 'string') {
+        node.content = String(node.content);
       }
       
-      // 递归验证子节点
+      // 确保 level 是数字（AI 可能返回字符串类型的数字）
+      if (typeof node.level === 'string') {
+        node.level = parseInt(node.level, 10);
+      }
+      if (typeof node.level !== 'number' || isNaN(node.level)) {
+        node.level = 0; // 默认为根节点级别
+      }
+      
+      // 确保 children 是数组
+      if (!Array.isArray(node.children)) {
+        node.children = [];
+      }
+      
+      // 递归处理子节点
       if (node.children.length > 0) {
-        this.validateNodeStructure(node.children);
+        this.normalizeNodeStructure(node.children);
       }
     }
   }

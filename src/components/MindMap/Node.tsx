@@ -1,13 +1,14 @@
 /**
  * 自定义思维导图节点组件
- * 支持节点样式定制、折叠/展开功能
+ * 支持节点样式定制、折叠/展开功能、主题配色
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Handle, Position, NodeProps } from 'reactflow';
-import { ChevronDown, ChevronRight, Plus, Edit3 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Edit3, Trash2 } from 'lucide-react';
 import { useMindMapStore } from '../../stores/mindmapStore';
 import { MindMapNode } from '../../types/mindmap';
+import { ThemeColors, getLevelColors } from '../../types/theme';
 
 // 节点数据接口
 interface NodeData {
@@ -17,56 +18,55 @@ interface NodeData {
   nodeData: MindMapNode;
 }
 
-// 根据层级获取节点样式
-const getNodeStyleByLevel = (level: number) => {
-  const styles = [
+// 根据层级和主题获取节点样式
+const getNodeStyleByLevel = (level: number, theme: ThemeColors) => {
+  const levelColors = getLevelColors(theme, level);
+  
+  // 基础样式配置（根据层级调整大小）
+  const sizeConfigs = [
     // 根节点 (level 0)
     {
-      backgroundColor: '#1976d2',
-      color: '#ffffff',
       fontSize: '18px',
-      fontWeight: 'bold',
+      fontWeight: 'bold' as const,
       borderRadius: '12px',
-      padding: '16px 20px',
-      minWidth: '160px',
-      boxShadow: '0 4px 16px rgba(25, 118, 210, 0.3)'
+      padding: '16px 24px',
+      minWidth: '180px'
     },
     // 一级节点 (level 1)
     {
-      backgroundColor: '#42a5f5',
-      color: '#ffffff',
       fontSize: '16px',
-      fontWeight: '600',
+      fontWeight: '600' as const,
       borderRadius: '10px',
-      padding: '12px 16px',
-      minWidth: '140px',
-      boxShadow: '0 3px 12px rgba(66, 165, 245, 0.3)'
+      padding: '12px 18px',
+      minWidth: '150px'
     },
     // 二级节点 (level 2)
     {
-      backgroundColor: '#90caf9',
-      color: '#1565c0',
       fontSize: '14px',
-      fontWeight: '500',
+      fontWeight: '500' as const,
       borderRadius: '8px',
       padding: '10px 14px',
-      minWidth: '120px',
-      boxShadow: '0 2px 8px rgba(144, 202, 249, 0.3)'
+      minWidth: '130px'
     },
     // 三级及以下节点 (level 3+)
     {
-      backgroundColor: '#e3f2fd',
-      color: '#1565c0',
       fontSize: '13px',
-      fontWeight: 'normal',
+      fontWeight: 'normal' as const,
       borderRadius: '6px',
       padding: '8px 12px',
-      minWidth: '100px',
-      boxShadow: '0 1px 4px rgba(227, 242, 253, 0.5)'
+      minWidth: '110px'
     }
   ];
 
-  return styles[Math.min(level, styles.length - 1)];
+  const sizeConfig = sizeConfigs[Math.min(level, sizeConfigs.length - 1)];
+
+  return {
+    backgroundColor: levelColors.backgroundColor,
+    color: levelColors.textColor,
+    borderColor: levelColors.borderColor,
+    ...sizeConfig,
+    boxShadow: `0 ${4 - level}px ${12 - level * 2}px rgba(0, 0, 0, 0.15)`
+  };
 };
 
 // 自定义思维导图节点组件
@@ -78,17 +78,20 @@ const MindMapNodeComponent: React.FC<NodeProps<NodeData>> = ({
   const {
     updateNode,
     addNode,
+    deleteNode,
     toggleNodeCollapse,
     getChildNodes,
     viewState,
-    setEditingNode
+    setEditingNode,
+    currentTheme
   } = useMindMapStore();
 
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(data.label);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const nodeStyle = getNodeStyleByLevel(data.level);
+  // 使用主题配色
+  const nodeStyle = useMemo(() => getNodeStyleByLevel(data.level, currentTheme), [data.level, currentTheme]);
   const hasChildren = getChildNodes(id).length > 0;
   const isEditingThis = viewState.editingNodeId === id;
 
@@ -153,13 +156,30 @@ const MindMapNodeComponent: React.FC<NodeProps<NodeData>> = ({
   // 处理添加子节点
   const handleAddChild = (e: React.MouseEvent) => {
     e.stopPropagation();
+    e.preventDefault();
+    console.log('添加子节点到:', id);
     addNode(id, '新节点');
+  };
+
+  // 处理删除节点
+  const handleDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    // 不允许删除根节点
+    if (data.level === 0) {
+      console.log('不能删除根节点');
+      return;
+    }
+    console.log('删除节点:', id);
+    deleteNode(id);
   };
 
   // 计算节点样式
   const computedStyle = {
     ...nodeStyle,
-    border: selected ? '2px solid #ff9800' : '1px solid rgba(0, 0, 0, 0.1)',
+    border: selected 
+      ? `3px solid ${currentTheme.selectedBorderColor}` 
+      : `2px solid ${nodeStyle.borderColor}`,
     transform: selected ? 'scale(1.02)' : 'scale(1)',
     transition: 'all 0.2s ease-in-out',
     cursor: isEditing ? 'text' : 'pointer',
@@ -187,22 +207,28 @@ const MindMapNodeComponent: React.FC<NodeProps<NodeData>> = ({
         />
       )}
 
+      {/* 折叠/展开按钮 - 放在节点外部右侧，更容易点击 */}
+      {hasChildren && (
+        <button
+          onClick={handleToggleCollapse}
+          onMouseDown={(e) => e.stopPropagation()} // 阻止拖拽
+          className="absolute -right-6 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded-full bg-white border-2 shadow-md hover:scale-110 transition-transform z-10"
+          style={{ 
+            borderColor: nodeStyle.borderColor,
+            color: nodeStyle.backgroundColor
+          }}
+          title={data.collapsed ? '展开子节点' : '折叠子节点'}
+        >
+          {data.collapsed ? (
+            <ChevronRight size={12} strokeWidth={3} />
+          ) : (
+            <ChevronDown size={12} strokeWidth={3} />
+          )}
+        </button>
+      )}
+
       {/* 节点内容区域 */}
       <div className="flex items-center space-x-2">
-        {/* 折叠/展开按钮 */}
-        {hasChildren && (
-          <button
-            onClick={handleToggleCollapse}
-            className="flex-shrink-0 w-5 h-5 flex items-center justify-center rounded-full hover:bg-black hover:bg-opacity-10 transition-colors"
-            style={{ color: nodeStyle.color }}
-          >
-            {data.collapsed ? (
-              <ChevronRight size={14} />
-            ) : (
-              <ChevronDown size={14} />
-            )}
-          </button>
-        )}
 
         {/* 节点文本内容 */}
         <div className="flex-1 min-w-0">
@@ -253,6 +279,17 @@ const MindMapNodeComponent: React.FC<NodeProps<NodeData>> = ({
             >
               <Edit3 size={12} />
             </button>
+            {/* 删除按钮 - 非根节点才显示 */}
+            {data.level > 0 && (
+              <button
+                onClick={handleDelete}
+                className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-red-500 hover:bg-opacity-20 transition-colors"
+                style={{ color: '#ef4444' }}
+                title="删除节点"
+              >
+                <Trash2 size={12} />
+              </button>
+            )}
           </div>
         )}
       </div>

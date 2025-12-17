@@ -7,43 +7,43 @@ import { create } from 'zustand';
 import { storageService } from '../services/storageService';
 
 // 支持的Gemini模型列表
-// 参考: https://ai.google.dev/gemini-api/docs/models
 // 参考: https://ai.google.dev/gemini-api/docs/gemini-3
+// 参考: https://ai.google.dev/gemini-api/docs/models
 export const SUPPORTED_MODELS = [
   {
     id: 'gemini-3-pro-preview',
     name: 'Gemini 3 Pro 预览版',
-    description: '最新Gemini 3系列，性能最强',
+    description: '最新最强模型，多模态理解和推理能力最佳',
     recommended: true
+  },
+  {
+    id: 'gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash',
+    description: '稳定版，快速响应',
+    recommended: false
+  },
+  {
+    id: 'gemini-2.5-pro',
+    name: 'Gemini 2.5 Pro',
+    description: '高级思考模型，复杂推理能力强',
+    recommended: false
   },
   {
     id: 'gemini-2.0-flash',
     name: 'Gemini 2.0 Flash',
-    description: '稳定版，速度快性能强',
-    recommended: false
-  },
-  {
-    id: 'gemini-2.0-flash-lite',
-    name: 'Gemini 2.0 Flash Lite',
-    description: '轻量版，响应更快',
+    description: '稳定版，100万token上下文',
     recommended: false
   },
   {
     id: 'gemini-1.5-flash',
     name: 'Gemini 1.5 Flash',
-    description: '稳定的快速模型',
+    description: '旧版兼容，稳定可靠',
     recommended: false
   },
   {
     id: 'gemini-1.5-pro',
     name: 'Gemini 1.5 Pro',
-    description: '平衡性能和质量',
-    recommended: false
-  },
-  {
-    id: 'gemini-pro',
-    name: 'Gemini Pro',
-    description: '经典稳定版本',
+    description: '旧版Pro，平衡性能和质量',
     recommended: false
   }
 ] as const;
@@ -71,7 +71,7 @@ const DEFAULT_SETTINGS: Settings = {
   enableAnimation: true,
   maxNodes: 1000,
   maxDepth: 10,
-  selectedModel: 'gemini-3-pro-preview'
+  selectedModel: 'gemini-3-pro-preview'  // 使用最新的Gemini 3 Pro预览版模型
 };
 
 // Settings Store 接口定义

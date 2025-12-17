@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Layout, Button, Loading, SettingsPanel } from './components';
 import { FileUploader, TextInput, QuickGenerate } from './components/Input';
 import { GenerateData } from './components/Input/QuickGenerate';
 import { Canvas } from './components/MindMap';
 import { Sidebar } from './components/Layout';
+import { ExportMenu, ExportPanel } from './components/Export';
 
 import { initializeSettings, useSettingsStore } from './stores/settingsStore';
 import { useMindMapStore } from './stores/mindmapStore';
@@ -18,10 +19,16 @@ function AppContent() {
 
   const [showSettings, setShowSettings] = useState(false);
   const [showQuickGenerate, setShowQuickGenerate] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showExportPanel, setShowExportPanel] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
   const [inputMode, setInputMode] = useState<'file' | 'text' | 'topic'>('file');
   const [textContent, setTextContent] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+
+  
+  // 画布引用，用于导出PNG
+  const canvasRef = useRef<HTMLDivElement>(null);
 
   // 使用错误处理上下文
   const { 
@@ -57,7 +64,12 @@ function AppContent() {
   };
 
   const handleExportClick = () => {
-    showInfo('导出功能', '导出功能正在开发中...');
+    if (!currentMindMap) {
+      showError('导出失败', '请先创建或加载思维导图');
+      return;
+    }
+    // 使用新的导出面板
+    setShowExportPanel(true);
   };
 
   const handleMindMapSelect = async (mindMap: any) => {
@@ -334,7 +346,7 @@ function AppContent() {
           {currentMindMap ? (
             // 显示思维导图 - 确保容器有明确的高度
             <div className="flex-1 relative w-full h-full" style={{ minHeight: 0 }}>
-              <div className="absolute inset-0">
+              <div className="absolute inset-0" ref={canvasRef}>
                 <Canvas />
               </div>
               {isGenerating && (
@@ -468,6 +480,20 @@ function AppContent() {
         onMindMapSelect={handleMindMapSelect}
         onMindMapDelete={handleMindMapDelete}
         isLoading={historyLoading}
+      />
+
+      {/* 旧版导出菜单（保留兼容） */}
+      <ExportMenu
+        isOpen={showExportMenu}
+        onClose={() => setShowExportMenu(false)}
+        mindMapData={currentMindMap}
+        canvasRef={canvasRef as React.RefObject<HTMLElement>}
+      />
+
+      {/* 新版导出面板（支持多种格式） */}
+      <ExportPanel
+        isOpen={showExportPanel}
+        onClose={() => setShowExportPanel(false)}
       />
 
     </>

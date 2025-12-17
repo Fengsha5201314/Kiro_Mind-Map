@@ -3,3 +3,4 @@
  */
 
 export { ExportMenu } from './ExportMenu';
+export { default as ExportPanel } from './ExportPanel';

@@ -1,0 +1,217 @@
+/**
+ * 导出面板组件
+ * 支持多种格式导出思维导图
+ */
+
+import React, { useState } from 'react';
+import { useMindMapStore } from '../../stores/mindmapStore';
+import { exportService, EXPORT_FORMATS, ExportFormat } from '../../services/exportService';
+
+interface ExportPanelProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+const ExportPanel: React.FC<ExportPanelProps> = ({ isOpen, onClose }) => {
+  const { currentMindMap } = useMindMapStore();
+  const [exporting, setExporting] = useState<ExportFormat | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // 处理导出
+  const handleExport = async (format: ExportFormat) => {
+    if (!currentMindMap) {
+      setError('没有可导出的思维导图');
+      return;
+    }
+
+    setExporting(format);
+    setError(null);
+
+    try {
+      const formatInfo = EXPORT_FORMATS.find(f => f.id === format);
+      const filename = `${currentMindMap.title || '思维导图'}${formatInfo?.extension || '.txt'}`;
+      
+      const blob = await exportService.export(currentMindMap, format);
+      exportService.downloadFile(blob, filename);
+      
+      // 导出成功后关闭面板
+      setTimeout(() => {
+        setExporting(null);
+        onClose();
+      }, 500);
+    } catch (err) {
+      console.error('导出失败:', err);
+      setError(err instanceof Error ? err.message : '导出失败');
+      setExporting(null);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  // 按类别分组格式
+  const sourceFormats = EXPORT_FORMATS.filter(f => f.category === 'source');
+  const imageFormats = EXPORT_FORMATS.filter(f => f.category === 'image');
+  const otherFormats = EXPORT_FORMATS.filter(f => !['source', 'image'].includes(f.category));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* 背景遮罩 */}
+      <div 
+        className="absolute inset-0 bg-black/50"
+        onClick={onClose}
+      />
+      
+      {/* 面板内容 */}
+      <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden">
+        {/* 标题栏 */}
+        <div className="flex items-center justify-between px-6 py-4 border-b">
+          <h2 className="text-xl font-semibold text-gray-800">导出思维导图</h2>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* 内容区域 */}
+        <div className="p-6 overflow-y-auto max-h-[60vh]">
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 text-red-600 rounded-lg text-sm">
+              {error}
+            </div>
+          )}
+
+          {/* 源文件格式 */}
+          <div className="mb-6">
+            <h3 className="text-sm font-medium text-gray-500 mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+              源文件格式（可二次编辑）
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {sourceFormats.map(format => (
+                <FormatCard
+                  key={format.id}
+                  format={format}
+                  isExporting={exporting === format.id}
+                  onExport={() => handleExport(format.id)}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* 图片格式 */}
+          <div className="mb-6">
+            <h3 className="text-sm font-medium text-gray-500 mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+              图片格式（适合分享）
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {imageFormats.map(format => (
+                <FormatCard
+                  key={format.id}
+                  format={format}
+                  isExporting={exporting === format.id}
+                  onExport={() => handleExport(format.id)}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* 其他格式 */}
+          <div>
+            <h3 className="text-sm font-medium text-gray-500 mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 bg-purple-500 rounded-full"></span>
+              其他格式
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {otherFormats.map(format => (
+                <FormatCard
+                  key={format.id}
+                  format={format}
+                  isExporting={exporting === format.id}
+                  onExport={() => handleExport(format.id)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* 底部提示 */}
+        <div className="px-6 py-4 bg-gray-50 border-t">
+          <p className="text-xs text-gray-500">
+            💡 提示：推荐使用 <strong>FreeMind (.mm)</strong> 或 <strong>OPML</strong> 格式，
+            兼容 XMind、MindManager、WPS 等主流思维导图软件。
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// 格式卡片组件
+interface FormatCardProps {
+  format: typeof EXPORT_FORMATS[0];
+  isExporting: boolean;
+  onExport: () => void;
+}
+
+const FormatCard: React.FC<FormatCardProps> = ({ format, isExporting, onExport }) => {
+  return (
+    <button
+      onClick={onExport}
+      disabled={isExporting}
+      className={`
+        p-4 rounded-lg border text-left transition-all
+        ${isExporting 
+          ? 'bg-blue-50 border-blue-200' 
+          : 'bg-white border-gray-200 hover:border-blue-300 hover:shadow-md'
+        }
+      `}
+    >
+      <div className="flex items-start justify-between">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="font-medium text-gray-800">{format.name}</span>
+            <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded">
+              {format.extension}
+            </span>
+          </div>
+          <p className="text-xs text-gray-500 mb-2">{format.description}</p>
+          <div className="flex flex-wrap gap-1">
+            {format.compatible.slice(0, 3).map(app => (
+              <span 
+                key={app} 
+                className="text-xs px-1.5 py-0.5 bg-gray-50 text-gray-400 rounded"
+              >
+                {app}
+              </span>
+            ))}
+            {format.compatible.length > 3 && (
+              <span className="text-xs text-gray-400">
+                +{format.compatible.length - 3}
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="ml-3">
+          {isExporting ? (
+            <div className="w-8 h-8 flex items-center justify-center">
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-blue-500"></div>
+            </div>
+          ) : (
+            <div className="w-8 h-8 flex items-center justify-center text-gray-400 group-hover:text-blue-500">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+            </div>
+          )}
+        </div>
+      </div>
+    </button>
+  );
+};
+
+export default ExportPanel;

@@ -1,203 +1,441 @@
 /**
- * 导出服务 - 实现思维导图的多格式导出功能
+ * 思维导图导出服务
+ * 支持多种格式导出：Markdown、FreeMind(.mm)、OPML、SVG、PNG、HTML
  */
 
-import html2canvas from 'html2canvas';
 import { MindMapData, MindMapNode } from '../types/mindmap';
+import html2canvas from 'html2canvas';
 
-// 导出错误类
+/**
+ * 导出错误类
+ */
 export class ExportError extends Error {
-  constructor(message: string, public code: string) {
+  code: string;
+  
+  constructor(message: string, code: string) {
     super(message);
     this.name = 'ExportError';
+    this.code = code;
   }
 }
 
-// 导出服务接口
-export interface ExportService {
-  exportToPNG(canvas: HTMLElement, filename: string): Promise<void>;
-  exportToJSON(data: MindMapData, filename: string): Promise<void>;
-  exportToMarkdown(data: MindMapData, filename: string): Promise<void>;
-}
+/**
+ * 导出格式类型
+ */
+export type ExportFormat = 
+  | 'markdown'   // Markdown 格式 (.md)
+  | 'freemind'   // FreeMind 格式 (.mm)
+  | 'opml'       // OPML 格式 (.opml)
+  | 'json'       // JSON 格式 (.json)
+  | 'svg'        // SVG 图片 (.svg)
+  | 'png'        // PNG 图片 (.png)
+  | 'html';      // 交互式 HTML (.html)
 
-// 导出服务实现
-export class ExportServiceImpl implements ExportService {
+/**
+ * 导出格式信息
+ */
+export const EXPORT_FORMATS = [
+  {
+    id: 'markdown' as ExportFormat,
+    name: 'Markdown',
+    extension: '.md',
+    description: '通用文本格式，可在任何编辑器中打开',
+    category: 'source',
+    compatible: ['XMind', 'Typora', 'Notion', 'Obsidian']
+  },
+  {
+    id: 'freemind' as ExportFormat,
+    name: 'FreeMind',
+    extension: '.mm',
+    description: '开源标准格式，兼容性最好',
+    category: 'source',
+    compatible: ['XMind', 'MindManager', 'WPS', '亿图脑图', '幕布']
+  },
+  {
+    id: 'opml' as ExportFormat,
+    name: 'OPML',
+    extension: '.opml',
+    description: '通用大纲格式，适合跨软件迁移',
+    category: 'source',
+    compatible: ['XMind', 'MindManager', '幕布', 'OmniOutliner']
+  },
+  {
+    id: 'json' as ExportFormat,
+    name: 'JSON',
+    extension: '.json',
+    description: '原始数据格式，可用于备份和恢复',
+    category: 'data',
+    compatible: ['本应用']
+  },
+  {
+    id: 'svg' as ExportFormat,
+    name: 'SVG 矢量图',
+    extension: '.svg',
+    description: '矢量图片，可无损缩放',
+    category: 'image',
+    compatible: ['浏览器', 'Illustrator', 'Figma']
+  },
+  {
+    id: 'png' as ExportFormat,
+    name: 'PNG 图片',
+    extension: '.png',
+    description: '通用图片格式，适合分享',
+    category: 'image',
+    compatible: ['所有图片查看器']
+  },
+  {
+    id: 'html' as ExportFormat,
+    name: '交互式 HTML',
+    extension: '.html',
+    description: '可在浏览器中交互查看的网页',
+    category: 'interactive',
+    compatible: ['所有浏览器']
+  }
+];
+
+/**
+ * 导出服务类
+ */
+export class ExportService {
+  
   /**
-   * 导出为PNG图片
-   * @param canvas 画布DOM元素
-   * @param filename 文件名
+   * 导出思维导图为指定格式
    */
-  async exportToPNG(canvas: HTMLElement, filename: string): Promise<void> {
-    try {
-      if (!canvas) {
-        throw new ExportError('画布元素不存在', 'CANVAS_NOT_FOUND');
-      }
-
-      // 使用html2canvas截取画布内容
-      const canvasElement = await html2canvas(canvas, {
-        backgroundColor: '#ffffff',
-        scale: 2, // 提高图片质量
-        useCORS: true,
-        allowTaint: true,
-        logging: false,
-        width: canvas.scrollWidth,
-        height: canvas.scrollHeight
-      });
-
-      // 转换为blob并下载
-      canvasElement.toBlob((blob) => {
-        if (!blob) {
-          throw new ExportError('生成图片失败', 'CANVAS_TO_BLOB_FAILED');
-        }
-
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename.endsWith('.png') ? filename : `${filename}.png`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-      }, 'image/png', 0.95);
-
-    } catch (error) {
-      if (error instanceof ExportError) {
-        throw error;
-      }
-      throw new ExportError(`PNG导出失败: ${error instanceof Error ? error.message : '未知错误'}`, 'PNG_EXPORT_FAILED');
+  async export(data: MindMapData, format: ExportFormat): Promise<Blob> {
+    switch (format) {
+      case 'markdown':
+        return this.createMarkdownBlob(data);
+      case 'freemind':
+        return this.exportToFreeMind(data);
+      case 'opml':
+        return this.exportToOPML(data);
+      case 'json':
+        return this.createJSONBlob(data);
+      case 'svg':
+        return this.exportToSVGBlob(data);
+      case 'png':
+        return this.exportToPNGBlob(data);
+      case 'html':
+        return this.exportToHTMLBlob(data);
+      default:
+        throw new Error(`不支持的导出格式: ${format}`);
     }
   }
 
   /**
-   * 导出为JSON文件
-   * @param data 思维导图数据
-   * @param filename 文件名
+   * 下载文件
+   */
+  downloadFile(blob: Blob, filename: string): void {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  /**
+   * 导出为 Markdown 格式（内部使用）
+   */
+  private createMarkdownBlob(data: MindMapData): Blob {
+    const markdown = this.convertToMarkdown(data);
+    return new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+  }
+
+  /**
+   * 将思维导图数据转换为 Markdown
+   */
+  convertToMarkdown(data: MindMapData): string {
+    const lines: string[] = [];
+    
+    // 添加标题
+    lines.push(`# ${data.title}`);
+    lines.push('');
+    
+    // 找到根节点
+    const rootNodes = data.nodes.filter(n => n.level === 0);
+    
+    // 递归生成 Markdown
+    const generateMarkdown = (node: MindMapNode, level: number): void => {
+      const prefix = '#'.repeat(Math.min(level + 1, 6)) + ' ';
+      lines.push(prefix + node.content);
+      
+      // 获取子节点
+      const children = data.nodes.filter(n => n.parentId === node.id);
+      children.forEach(child => {
+        generateMarkdown(child, level + 1);
+      });
+    };
+    
+    rootNodes.forEach(root => {
+      generateMarkdown(root, 1);
+    });
+    
+    return lines.join('\n');
+  }
+
+
+  /**
+   * 导出为 FreeMind (.mm) 格式
+   * FreeMind 是开源标准，几乎所有思维导图软件都支持
+   */
+  private exportToFreeMind(data: MindMapData): Blob {
+    const xml = this.convertToFreeMindXML(data);
+    return new Blob([xml], { type: 'application/xml;charset=utf-8' });
+  }
+
+  /**
+   * 将思维导图数据转换为 FreeMind XML
+   */
+  private convertToFreeMindXML(data: MindMapData): string {
+    const escapeXml = (str: string): string => {
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+    };
+
+    const generateNode = (node: MindMapNode, position?: 'left' | 'right'): string => {
+      const children = data.nodes.filter(n => n.parentId === node.id);
+      const posAttr = position ? ` POSITION="${position}"` : '';
+      
+      if (children.length === 0) {
+        return `<node TEXT="${escapeXml(node.content)}"${posAttr}/>`;
+      }
+      
+      const childrenXml = children.map((child, index) => {
+        // 根节点的子节点交替分布在左右两侧
+        const childPos = node.level === 0 
+          ? (index % 2 === 0 ? 'right' : 'left')
+          : undefined;
+        return generateNode(child, childPos);
+      }).join('\n');
+      
+      return `<node TEXT="${escapeXml(node.content)}"${posAttr}>
+${childrenXml}
+</node>`;
+    };
+
+    const rootNode = data.nodes.find(n => n.level === 0);
+    if (!rootNode) {
+      return '<?xml version="1.0" encoding="UTF-8"?><map version="1.0.1"></map>';
+    }
+
+    const rootXml = generateNode(rootNode);
+    
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<map version="1.0.1">
+${rootXml}
+</map>`;
+  }
+
+  /**
+   * 导出为 OPML 格式
+   * OPML 是通用的大纲格式，兼容性很好
+   */
+  private exportToOPML(data: MindMapData): Blob {
+    const xml = this.convertToOPML(data);
+    return new Blob([xml], { type: 'application/xml;charset=utf-8' });
+  }
+
+  /**
+   * 将思维导图数据转换为 OPML
+   */
+  private convertToOPML(data: MindMapData): string {
+    const escapeXml = (str: string): string => {
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    };
+
+    const generateOutline = (node: MindMapNode): string => {
+      const children = data.nodes.filter(n => n.parentId === node.id);
+      
+      if (children.length === 0) {
+        return `<outline text="${escapeXml(node.content)}"/>`;
+      }
+      
+      const childrenXml = children.map(child => generateOutline(child)).join('\n');
+      
+      return `<outline text="${escapeXml(node.content)}">
+${childrenXml}
+</outline>`;
+    };
+
+    const rootNode = data.nodes.find(n => n.level === 0);
+    const bodyContent = rootNode ? generateOutline(rootNode) : '';
+    const now = new Date().toISOString();
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head>
+    <title>${escapeXml(data.title)}</title>
+    <dateCreated>${now}</dateCreated>
+    <dateModified>${now}</dateModified>
+  </head>
+  <body>
+${bodyContent}
+  </body>
+</opml>`;
+  }
+
+  /**
+   * 导出为 JSON 格式（内部使用）
+   */
+  private createJSONBlob(data: MindMapData): Blob {
+    const json = JSON.stringify(data, null, 2);
+    return new Blob([json], { type: 'application/json;charset=utf-8' });
+  }
+
+  /**
+   * 导出为 SVG 格式（内部使用）
+   */
+  private async exportToSVGBlob(_data: MindMapData): Promise<Blob> {
+    // 获取当前渲染的 SVG 元素
+    const svgElement = document.querySelector('.markmap svg') as SVGElement;
+    if (!svgElement) {
+      // 如果没有 markmap，尝试获取 ReactFlow 的 SVG
+      const reactFlowSvg = document.querySelector('.react-flow svg') as SVGElement;
+      if (reactFlowSvg) {
+        const svgData = new XMLSerializer().serializeToString(reactFlowSvg);
+        return new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+      }
+      throw new Error('未找到可导出的思维导图');
+    }
+    
+    const svgData = new XMLSerializer().serializeToString(svgElement);
+    return new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+  }
+
+  /**
+   * 导出为 PNG 格式（内部使用）
+   */
+  private async exportToPNGBlob(data: MindMapData): Promise<Blob> {
+    const svgBlob = await this.exportToSVGBlob(data);
+    const svgUrl = URL.createObjectURL(svgBlob);
+    
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const scale = 2; // 2倍分辨率
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('无法创建 Canvas 上下文'));
+          return;
+        }
+        
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.scale(scale, scale);
+        ctx.drawImage(img, 0, 0);
+        
+        canvas.toBlob(blob => {
+          URL.revokeObjectURL(svgUrl);
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error('PNG 导出失败'));
+          }
+        }, 'image/png');
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(svgUrl);
+        reject(new Error('SVG 加载失败'));
+      };
+      img.src = svgUrl;
+    });
+  }
+
+  /**
+   * 导出为交互式 HTML（内部使用）
+   */
+  private exportToHTMLBlob(data: MindMapData): Blob {
+    const markdown = this.convertToMarkdown(data);
+    
+    const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${data.title} - 思维导图</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body, #mindmap { width: 100%; height: 100%; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  </style>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/markmap-view/dist/style.css">
+</head>
+<body>
+  <svg id="mindmap"></svg>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/markmap-view"></script>
+  <script src="https://cdn.jsdelivr.net/npm/markmap-lib"></script>
+  <script>
+    const markdown = ${JSON.stringify(markdown)};
+    const { Transformer } = markmap;
+    const transformer = new Transformer();
+    const { root } = transformer.transform(markdown);
+    const { Markmap } = markmap;
+    Markmap.create('#mindmap', null, root);
+  </script>
+</body>
+</html>`;
+    
+    return new Blob([html], { type: 'text/html;charset=utf-8' });
+  }
+  /**
+   * 导出画布为 PNG（旧 API 兼容）
+   */
+  async exportToPNG(element: HTMLElement, filename: string): Promise<void> {
+    try {
+      const canvas = await html2canvas(element, {
+        backgroundColor: '#ffffff',
+        scale: 2,
+        useCORS: true,
+        logging: false
+      });
+      
+      canvas.toBlob(blob => {
+        if (blob) {
+          this.downloadFile(blob, filename);
+        } else {
+          throw new ExportError('PNG 导出失败', 'PNG_EXPORT_FAILED');
+        }
+      }, 'image/png');
+    } catch (error) {
+      throw new ExportError(
+        error instanceof Error ? error.message : 'PNG 导出失败',
+        'PNG_EXPORT_FAILED'
+      );
+    }
+  }
+
+  /**
+   * 导出为 JSON（旧 API 兼容）
    */
   async exportToJSON(data: MindMapData, filename: string): Promise<void> {
-    try {
-      if (!data) {
-        throw new ExportError('思维导图数据不存在', 'DATA_NOT_FOUND');
-      }
-
-      // 序列化数据
-      const jsonString = JSON.stringify(data, null, 2);
-      const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
-
-      // 创建下载链接
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename.endsWith('.json') ? filename : `${filename}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-
-    } catch (error) {
-      if (error instanceof ExportError) {
-        throw error;
-      }
-      throw new ExportError(`JSON导出失败: ${error instanceof Error ? error.message : '未知错误'}`, 'JSON_EXPORT_FAILED');
-    }
+    const blob = this.createJSONBlob(data);
+    this.downloadFile(blob, filename);
   }
 
   /**
-   * 导出为Markdown文件
-   * @param data 思维导图数据
-   * @param filename 文件名
+   * 导出为 Markdown（旧 API 兼容）
    */
   async exportToMarkdown(data: MindMapData, filename: string): Promise<void> {
-    try {
-      if (!data) {
-        throw new ExportError('思维导图数据不存在', 'DATA_NOT_FOUND');
-      }
-
-      // 构建节点映射
-      const nodeMap = new Map<string, MindMapNode>();
-      data.nodes.forEach(node => {
-        nodeMap.set(node.id, node);
-      });
-
-      // 找到根节点
-      const rootNodes = data.nodes.filter(node => node.parentId === null);
-      if (rootNodes.length === 0) {
-        throw new ExportError('未找到根节点', 'ROOT_NODE_NOT_FOUND');
-      }
-
-      // 生成Markdown内容
-      let markdown = `# ${data.title}\n\n`;
-      
-      // 添加元数据信息
-      if (data.metadata) {
-        markdown += `> 创建时间: ${new Date(data.createdAt).toLocaleString('zh-CN')}\n`;
-        markdown += `> 更新时间: ${new Date(data.updatedAt).toLocaleString('zh-CN')}\n`;
-        if (data.metadata.sourceType) {
-          markdown += `> 来源类型: ${data.metadata.sourceType}\n`;
-        }
-        if (data.metadata.sourceFileName) {
-          markdown += `> 源文件: ${data.metadata.sourceFileName}\n`;
-        }
-        markdown += '\n';
-      }
-
-      // 递归生成节点内容
-      const generateNodeMarkdown = (node: MindMapNode, level: number = 0): string => {
-        let result = '';
-        
-        // 生成当前节点的Markdown
-        if (level === 0) {
-          // 根节点使用二级标题
-          result += `## ${node.content}\n\n`;
-        } else {
-          // 子节点使用缩进和列表
-          const indent = '  '.repeat(level - 1);
-          result += `${indent}- ${node.content}\n`;
-        }
-
-        // 递归处理子节点
-        const children = node.children
-          .map(childId => nodeMap.get(childId))
-          .filter((child): child is MindMapNode => child !== undefined)
-          .sort((a, b) => a.level - b.level); // 按层级排序
-
-        children.forEach(child => {
-          result += generateNodeMarkdown(child, level + 1);
-        });
-
-        return result;
-      };
-
-      // 生成所有根节点的内容
-      rootNodes.forEach(rootNode => {
-        markdown += generateNodeMarkdown(rootNode);
-        markdown += '\n';
-      });
-
-      // 添加统计信息
-      markdown += `---\n\n`;
-      markdown += `**统计信息:**\n`;
-      markdown += `- 总节点数: ${data.nodes.length}\n`;
-      markdown += `- 最大层级: ${Math.max(...data.nodes.map(n => n.level))}\n`;
-      
-      // 创建下载
-      const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename.endsWith('.md') ? filename : `${filename}.md`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-
-    } catch (error) {
-      if (error instanceof ExportError) {
-        throw error;
-      }
-      throw new ExportError(`Markdown导出失败: ${error instanceof Error ? error.message : '未知错误'}`, 'MARKDOWN_EXPORT_FAILED');
-    }
+    const blob = this.createMarkdownBlob(data);
+    this.downloadFile(blob, filename);
   }
 }
 
-// 导出服务单例
-export const exportService = new ExportServiceImpl();
+// 导出服务实例
+export const exportService = new ExportService();

@@ -137,40 +137,56 @@ export class MindMapService {
    * @param structureNodes 结构化节点数组
    * @param flatNodes 扁平节点数组（输出）
    * @param parentId 父节点ID
+   * @param depth 当前深度（用于计算正确的level）
    */
   private convertNodesToFlat(
     structureNodes: MindMapStructure['nodes'],
     flatNodes: MindMapNode[],
-    parentId: string | null
+    parentId: string | null,
+    depth: number = 0
   ): void {
     for (const structureNode of structureNodes) {
       const nodeId = generateSecureId();
       const now = Date.now();
       
+      // 使用传入的depth作为level，而不是AI返回的level（AI返回的level可能不准确）
+      const nodeLevel = depth;
+      
       // 创建节点
       const node: MindMapNode = {
         id: nodeId,
         content: structureNode.content,
-        level: structureNode.level,
+        level: nodeLevel,
         parentId,
         children: [],
         collapsed: false,
         createdAt: now,
         updatedAt: now,
-        style: this.getDefaultNodeStyle(structureNode.level)
+        style: this.getDefaultNodeStyle(nodeLevel)
       };
       
       flatNodes.push(node);
       
       // 如果有子节点，递归处理
       if (structureNode.children && structureNode.children.length > 0) {
-        // 递归处理子节点
-        this.convertNodesToFlat(structureNode.children, flatNodes, nodeId);
+        // 递归处理子节点，depth + 1
+        this.convertNodesToFlat(structureNode.children, flatNodes, nodeId, depth + 1);
         
         // 找到刚添加的子节点并更新父节点的children数组
         const childNodes = flatNodes.filter(n => n.parentId === nodeId);
         node.children = childNodes.map(child => child.id);
       }
+    }
+    
+    // 调试日志
+    if (depth === 0) {
+      console.log('转换后的节点结构:', flatNodes.map(n => ({
+        id: n.id.substring(0, 8),
+        content: n.content.substring(0, 20),
+        level: n.level,
+        parentId: n.parentId?.substring(0, 8) || null,
+        childrenCount: n.children.length
+      })));
     }
   }
 
