@@ -3,7 +3,7 @@
  * 提供缩放、适应视图、重置等控制功能
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { useReactFlow } from 'reactflow';
 import { 
   ZoomIn, 
@@ -18,7 +18,7 @@ import {
   Redo2
 } from 'lucide-react';
 import { useMindMapStore } from '../../stores/mindmapStore';
-import { ExportMenu } from '../Export/ExportMenu';
+import ExportPanel from '../Export/ExportPanel';
 import ThemeSelector from './ThemeSelector';
 
 // 控制按钮组件
@@ -44,9 +44,8 @@ const MindMapControls: React.FC = () => {
     canRedo
   } = useMindMapStore();
 
-  // 导出菜单状态
-  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
-  const canvasRef = useRef<HTMLElement>(null);
+  // 导出面板状态
+  const [isExportPanelOpen, setIsExportPanelOpen] = useState(false);
 
   // 放大
   const handleZoomIn = () => {
@@ -111,19 +110,14 @@ const MindMapControls: React.FC = () => {
     return `${Math.round(zoom * 100)}%`;
   };
 
-  // 打开导出菜单
-  const handleOpenExportMenu = () => {
-    // 获取画布元素引用
-    const canvasElement = document.querySelector('.react-flow') as HTMLElement;
-    if (canvasElement && canvasRef.current !== canvasElement) {
-      (canvasRef as React.MutableRefObject<HTMLElement | null>).current = canvasElement;
-    }
-    setIsExportMenuOpen(true);
+  // 打开导出面板
+  const handleOpenExportPanel = () => {
+    setIsExportPanelOpen(true);
   };
 
-  // 关闭导出菜单
-  const handleCloseExportMenu = () => {
-    setIsExportMenuOpen(false);
+  // 关闭导出面板
+  const handleCloseExportPanel = () => {
+    setIsExportPanelOpen(false);
   };
 
   // 控制按钮样式 - 添加pointer-events确保可点击
@@ -249,7 +243,7 @@ const MindMapControls: React.FC = () => {
         <div className="flex flex-col space-y-1">
           {/* 导出按钮 */}
           <button
-            onClick={handleOpenExportMenu}
+            onClick={handleOpenExportPanel}
             className={currentMindMap ? buttonClass : disabledButtonClass}
             disabled={!currentMindMap}
             title="导出思维导图"
@@ -288,12 +282,10 @@ const MindMapControls: React.FC = () => {
         </div>
       )}
 
-      {/* 导出菜单 */}
-      <ExportMenu
-        mindMapData={currentMindMap}
-        canvasRef={canvasRef}
-        isOpen={isExportMenuOpen}
-        onClose={handleCloseExportMenu}
+      {/* 导出面板 */}
+      <ExportPanel
+        isOpen={isExportPanelOpen}
+        onClose={handleCloseExportPanel}
       />
     </div>
   );

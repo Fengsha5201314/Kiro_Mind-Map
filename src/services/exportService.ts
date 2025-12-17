@@ -26,6 +26,8 @@ export type ExportFormat =
   | 'markdown'   // Markdown 格式 (.md)
   | 'freemind'   // FreeMind 格式 (.mm)
   | 'opml'       // OPML 格式 (.opml)
+  | 'xmind'      // XMind 格式 (.xmind)
+  | 'txt'        // 纯文本大纲 (.txt)
   | 'json'       // JSON 格式 (.json)
   | 'svg'        // SVG 图片 (.svg)
   | 'png'        // PNG 图片 (.png)
@@ -36,20 +38,20 @@ export type ExportFormat =
  */
 export const EXPORT_FORMATS = [
   {
-    id: 'markdown' as ExportFormat,
-    name: 'Markdown',
-    extension: '.md',
-    description: '通用文本格式，可在任何编辑器中打开',
-    category: 'source',
-    compatible: ['XMind', 'Typora', 'Notion', 'Obsidian']
-  },
-  {
     id: 'freemind' as ExportFormat,
     name: 'FreeMind',
     extension: '.mm',
-    description: '开源标准格式，兼容性最好',
+    description: '开源标准格式，兼容性最好（推荐）',
     category: 'source',
-    compatible: ['XMind', 'MindManager', 'WPS', '亿图脑图', '幕布']
+    compatible: ['XMind', 'MindManager', 'WPS', '亿图脑图', '幕布', 'MindMeister']
+  },
+  {
+    id: 'xmind' as ExportFormat,
+    name: 'XMind',
+    extension: '.xmind',
+    description: 'XMind 原生格式，功能完整',
+    category: 'source',
+    compatible: ['XMind', 'XMind Zen']
   },
   {
     id: 'opml' as ExportFormat,
@@ -57,7 +59,23 @@ export const EXPORT_FORMATS = [
     extension: '.opml',
     description: '通用大纲格式，适合跨软件迁移',
     category: 'source',
-    compatible: ['XMind', 'MindManager', '幕布', 'OmniOutliner']
+    compatible: ['XMind', 'MindManager', '幕布', 'OmniOutliner', 'Dynalist']
+  },
+  {
+    id: 'markdown' as ExportFormat,
+    name: 'Markdown',
+    extension: '.md',
+    description: '通用文本格式，可在任何编辑器中打开',
+    category: 'source',
+    compatible: ['Typora', 'Notion', 'Obsidian', 'VS Code']
+  },
+  {
+    id: 'txt' as ExportFormat,
+    name: '纯文本大纲',
+    extension: '.txt',
+    description: '简单的缩进文本格式，通用性强',
+    category: 'source',
+    compatible: ['所有文本编辑器', '记事本', 'Word']
   },
   {
     id: 'json' as ExportFormat,
@@ -65,7 +83,7 @@ export const EXPORT_FORMATS = [
     extension: '.json',
     description: '原始数据格式，可用于备份和恢复',
     category: 'data',
-    compatible: ['本应用']
+    compatible: ['本应用', '开发者工具']
   },
   {
     id: 'svg' as ExportFormat,
@@ -73,15 +91,15 @@ export const EXPORT_FORMATS = [
     extension: '.svg',
     description: '矢量图片，可无损缩放',
     category: 'image',
-    compatible: ['浏览器', 'Illustrator', 'Figma']
+    compatible: ['浏览器', 'Illustrator', 'Figma', 'Sketch']
   },
   {
     id: 'png' as ExportFormat,
     name: 'PNG 图片',
     extension: '.png',
-    description: '通用图片格式，适合分享',
+    description: '通用图片格式，适合分享和演示',
     category: 'image',
-    compatible: ['所有图片查看器']
+    compatible: ['所有图片查看器', '微信', '钉钉']
   },
   {
     id: 'html' as ExportFormat,
@@ -109,6 +127,10 @@ export class ExportService {
         return this.exportToFreeMind(data);
       case 'opml':
         return this.exportToOPML(data);
+      case 'xmind':
+        return this.exportToXMind(data);
+      case 'txt':
+        return this.exportToPlainText(data);
       case 'json':
         return this.createJSONBlob(data);
       case 'svg':
@@ -118,7 +140,7 @@ export class ExportService {
       case 'html':
         return this.exportToHTMLBlob(data);
       default:
-        throw new Error(`不支持的导出格式: ${format}`);
+        throw new ExportError(`不支持的导出格式: ${format}`, 'UNSUPPORTED_FORMAT');
     }
   }
 
@@ -286,6 +308,119 @@ ${bodyContent}
   }
 
   /**
+   * 导出为 XMind 格式 (.xmind)
+   * XMind 文件实际上是一个 ZIP 包，包含 content.json 和 manifest.json
+   */
+  private async exportToXMind(data: MindMapData): Promise<Blob> {
+    // XMind 8+ 使用 JSON 格式
+    const xmindContent = this.convertToXMindJSON(data);
+    
+    // 由于浏览器环境无法直接创建 ZIP，我们导出为 XMind 兼容的 JSON
+    // 用户可以将其重命名为 .xmind 或导入到 XMind
+    const manifest = {
+      'file-entries': {
+        'content.json': {},
+        'metadata.json': {}
+      }
+    };
+    
+    const metadata = {
+      creator: {
+        name: 'AI思维导图生成器',
+        version: '1.0.0'
+      }
+    };
+
+    // 创建一个包含所有必要信息的 JSON 结构
+    const xmindPackage = {
+      content: xmindContent,
+      manifest: manifest,
+      metadata: metadata
+    };
+
+    return new Blob([JSON.stringify(xmindPackage, null, 2)], { 
+      type: 'application/json;charset=utf-8' 
+    });
+  }
+
+  /**
+   * 将思维导图数据转换为 XMind JSON 格式
+   */
+  private convertToXMindJSON(data: MindMapData): object[] {
+    const generateTopic = (node: MindMapNode): object => {
+      const children = data.nodes.filter(n => n.parentId === node.id);
+      
+      const topic: Record<string, unknown> = {
+        id: node.id,
+        class: node.level === 0 ? 'topic' : 'attached',
+        title: node.content,
+        structureClass: 'org.xmind.ui.map.unbalanced'
+      };
+
+      if (children.length > 0) {
+        topic.children = {
+          attached: children.map(child => generateTopic(child))
+        };
+      }
+
+      return topic;
+    };
+
+    const rootNode = data.nodes.find(n => n.level === 0);
+    if (!rootNode) {
+      return [];
+    }
+
+    return [{
+      id: data.id,
+      class: 'sheet',
+      title: data.title,
+      rootTopic: generateTopic(rootNode),
+      topicPositioning: 'fixed'
+    }];
+  }
+
+  /**
+   * 导出为纯文本大纲格式 (.txt)
+   */
+  private exportToPlainText(data: MindMapData): Blob {
+    const text = this.convertToPlainText(data);
+    return new Blob([text], { type: 'text/plain;charset=utf-8' });
+  }
+
+  /**
+   * 将思维导图数据转换为纯文本大纲
+   */
+  private convertToPlainText(data: MindMapData): string {
+    const lines: string[] = [];
+    
+    // 添加标题
+    lines.push(data.title);
+    lines.push('='.repeat(data.title.length));
+    lines.push('');
+    
+    // 递归生成文本大纲
+    const generateText = (node: MindMapNode, indent: number): void => {
+      const prefix = '  '.repeat(indent) + (indent > 0 ? '• ' : '');
+      lines.push(prefix + node.content);
+      
+      // 获取子节点
+      const children = data.nodes.filter(n => n.parentId === node.id);
+      children.forEach(child => {
+        generateText(child, indent + 1);
+      });
+    };
+    
+    // 找到根节点并生成
+    const rootNodes = data.nodes.filter(n => n.level === 0);
+    rootNodes.forEach(root => {
+      generateText(root, 0);
+    });
+    
+    return lines.join('\n');
+  }
+
+  /**
    * 导出为 JSON 格式（内部使用）
    */
   private createJSONBlob(data: MindMapData): Blob {
@@ -315,45 +450,58 @@ ${bodyContent}
 
   /**
    * 导出为 PNG 格式（内部使用）
+   * 使用 html2canvas 直接截取 ReactFlow 画布
    */
-  private async exportToPNGBlob(data: MindMapData): Promise<Blob> {
-    const svgBlob = await this.exportToSVGBlob(data);
-    const svgUrl = URL.createObjectURL(svgBlob);
-    
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const scale = 2; // 2倍分辨率
-        canvas.width = img.width * scale;
-        canvas.height = img.height * scale;
-        
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('无法创建 Canvas 上下文'));
-          return;
+  private async exportToPNGBlob(_data: MindMapData): Promise<Blob> {
+    // 查找 ReactFlow 画布容器
+    const reactFlowContainer = document.querySelector('.react-flow') as HTMLElement;
+    if (!reactFlowContainer) {
+      throw new ExportError('未找到思维导图画布', 'CANVAS_NOT_FOUND');
+    }
+
+    try {
+      // 使用 html2canvas 截取画布
+      // 注意：需要处理 oklch 颜色不支持的问题
+      const canvas = await html2canvas(reactFlowContainer, {
+        backgroundColor: '#f9fafb', // 使用固定的背景色
+        scale: 2, // 2倍分辨率
+        useCORS: true,
+        logging: false,
+        // 忽略不支持的 CSS 属性
+        ignoreElements: (element) => {
+          // 忽略小地图和控制按钮
+          return element.classList.contains('react-flow__minimap') ||
+                 element.classList.contains('react-flow__controls') ||
+                 element.classList.contains('react-flow__attribution');
+        },
+        onclone: (clonedDoc) => {
+          // 在克隆的文档中替换不支持的颜色
+          const style = clonedDoc.createElement('style');
+          style.textContent = `
+            * {
+              --tw-ring-color: rgba(59, 130, 246, 0.5) !important;
+            }
+          `;
+          clonedDoc.head.appendChild(style);
         }
-        
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.scale(scale, scale);
-        ctx.drawImage(img, 0, 0);
-        
+      });
+
+      return new Promise((resolve, reject) => {
         canvas.toBlob(blob => {
-          URL.revokeObjectURL(svgUrl);
           if (blob) {
             resolve(blob);
           } else {
-            reject(new Error('PNG 导出失败'));
+            reject(new ExportError('PNG 导出失败', 'PNG_EXPORT_FAILED'));
           }
-        }, 'image/png');
-      };
-      img.onerror = () => {
-        URL.revokeObjectURL(svgUrl);
-        reject(new Error('SVG 加载失败'));
-      };
-      img.src = svgUrl;
-    });
+        }, 'image/png', 0.95);
+      });
+    } catch (error) {
+      console.error('PNG 导出错误:', error);
+      throw new ExportError(
+        error instanceof Error ? error.message : 'PNG 导出失败',
+        'PNG_EXPORT_FAILED'
+      );
+    }
   }
 
   /**

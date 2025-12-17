@@ -291,8 +291,8 @@ const CanvasInner: React.FC = () => {
   // 记录上一次的结构签名，用于检测结构变化
   const prevStructureRef = React.useRef<string>('');
 
-  // 计算当前结构签名（节点ID + 折叠状态）
-  const structureSignature = useMemo(() => {
+  // 计算结构签名（仅用于判断是否需要重新布局：节点ID + 折叠状态）
+  const layoutSignature = useMemo(() => {
     if (!currentMindMap) return '';
     
     const visibleNodes = filterVisibleNodes(currentMindMap.nodes);
@@ -315,44 +315,42 @@ const CanvasInner: React.FC = () => {
     // 1. 先过滤掉被折叠隐藏的节点
     const visibleNodes = filterVisibleNodes(currentMindMap.nodes);
 
-    // 2. 检测结构是否变化
-    const structureChanged = prevStructureRef.current !== structureSignature;
+    // 2. 检测布局结构是否变化（不包含内容变化）
+    const layoutChanged = prevStructureRef.current !== layoutSignature;
     
-    // 3. 判断是否需要重新布局
-    const needsLayout = structureChanged || visibleNodes.some(node => !node.position);
+    // 3. 判断是否需要重新布局（仅在结构变化时重新布局，内容变化不重新布局）
+    const needsLayout = layoutChanged || visibleNodes.some(node => !node.position);
     
     let nodesWithPosition: MindMapNode[];
     if (needsLayout) {
       // 结构变化时，清除用户拖拽位置缓存，重新布局
-      if (structureChanged) {
+      if (layoutChanged) {
         userDraggedPositions.current.clear();
-        prevStructureRef.current = structureSignature;
+        prevStructureRef.current = layoutSignature;
       }
       nodesWithPosition = calculateTreeLayout(visibleNodes);
     } else {
-      // 结构未变化，使用store中的位置（包含用户拖拽的位置）
-      nodesWithPosition = visibleNodes;
+      // 结构未变化，保持现有位置
+      nodesWithPosition = visibleNodes.map(node => {
+        // 优先使用用户拖拽的位置
+        const draggedPos = userDraggedPositions.current.get(node.id);
+        if (draggedPos) {
+          return { ...node, position: draggedPos };
+        }
+        return node;
+      });
     }
 
-    // 4. 应用用户手动拖拽的位置（优先级最高）
-    nodesWithPosition = nodesWithPosition.map(node => {
-      const draggedPos = userDraggedPositions.current.get(node.id);
-      if (draggedPos) {
-        return { ...node, position: draggedPos };
-      }
-      return node;
-    });
-
-    // 5. 转换为ReactFlow节点格式
+    // 4. 转换为ReactFlow节点格式（每次都重新转换以确保内容更新）
     const reactFlowNodes = nodesWithPosition.map(node => 
       convertToReactFlowNode(node)
     );
 
-    // 6. 生成边连接（使用主题颜色）
+    // 5. 生成边连接（使用主题颜色）
     const reactFlowEdges = generateEdges(nodesWithPosition, currentTheme);
 
     return { nodes: reactFlowNodes, edges: reactFlowEdges };
-  }, [currentMindMap, structureSignature, currentTheme]);
+  }, [currentMindMap, layoutSignature, currentTheme]);
 
   // 记录是否是首次加载
   const isFirstLoad = React.useRef(true);
@@ -408,14 +406,16 @@ const CanvasInner: React.FC = () => {
       return;
     }
 
-    // 检测结构是否变化
-    const structureChanged = prevSignatureForEffect.current !== structureSignature;
+    // 检测布局结构是否变化
+    const layoutChanged = prevSignatureForEffect.current !== layoutSignature;
     
-    // 在结构变化或首次加载时更新节点
-    if (structureChanged || isFirstLoad.current) {
-      prevSignatureForEffect.current = structureSignature;
-      setNodes(processedNodes.nodes);
-      setEdges(processedNodes.edges);
+    // 始终更新节点数据（确保内容编辑后能立即显示）
+    setNodes(processedNodes.nodes);
+    setEdges(processedNodes.edges);
+
+    // 仅在布局结构变化或首次加载时自动适应视图
+    if (layoutChanged || isFirstLoad.current) {
+      prevSignatureForEffect.current = layoutSignature;
 
       // 自动适应视图（首次加载或结构变化时）
       if (processedNodes.nodes.length > 0) {
@@ -428,7 +428,7 @@ const CanvasInner: React.FC = () => {
         }, 50);
       }
     }
-  }, [processedNodes, structureSignature, setNodes, setEdges, fitView, currentMindMap]);
+  }, [processedNodes, layoutSignature, setNodes, setEdges, fitView, currentMindMap]);
 
   // 处理节点选择
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {

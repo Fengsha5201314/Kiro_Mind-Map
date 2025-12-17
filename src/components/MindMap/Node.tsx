@@ -121,8 +121,15 @@ const MindMapNodeComponent: React.FC<NodeProps<NodeData>> = ({
 
   // 处理编辑完成
   const handleEditComplete = () => {
-    if (editValue.trim() && editValue !== data.label) {
-      updateNode(id, { content: editValue.trim() });
+    const trimmedValue = editValue.trim();
+    if (trimmedValue && trimmedValue !== data.label) {
+      // 更新节点内容，同时更新 content 字段
+      updateNode(id, { content: trimmedValue });
+      // 强制更新本地显示值
+      setEditValue(trimmedValue);
+    } else if (!trimmedValue) {
+      // 如果输入为空，恢复原值
+      setEditValue(data.label);
     }
     setIsEditing(false);
     setEditingNode(undefined);
